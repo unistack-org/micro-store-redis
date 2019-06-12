@@ -1,7 +1,7 @@
 package redis
 
 import (
-	"github.com/micro/go-micro/options"
+	"github.com/micro/go-micro/config/options"
 	"github.com/micro/go-micro/store"
 	redis "gopkg.in/redis.v3"
 )
