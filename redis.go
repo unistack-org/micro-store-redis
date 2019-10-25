@@ -64,7 +64,7 @@ func (r *rkv) Write(records ...*store.Record) error {
 	return nil
 }
 
-func (r *rkv) Sync() ([]*store.Record, error) {
+func (r *rkv) List() ([]*store.Record, error) {
 	keys, err := r.Client.Keys("*").Result()
 	if err != nil {
 		return nil, err
