@@ -12,7 +12,7 @@ type rkv struct {
 }
 
 func (r *rkv) Read(keys ...string) ([]*store.Record, error) {
-	var records []*store.Record
+	records := make([]*store.Record, 0, len(keys))
 
 	for _, key := range keys {
 		val, err := r.Client.Get(key).Bytes()
@@ -69,7 +69,8 @@ func (r *rkv) List() ([]*store.Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	var vals []*store.Record
+
+	vals := make([]*store.Record, 0, len(keys))
 	for _, k := range keys {
 		i, err := r.Read(k)
 		if err != nil {
