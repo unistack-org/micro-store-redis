@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -83,6 +84,8 @@ func Test_rkv_configure(t *testing.T) {
 }
 
 func Test_Store(t *testing.T) {
+	ctx := context.Background()
+
 	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
 		t.Skip()
 	}
@@ -93,8 +96,7 @@ func Test_Store(t *testing.T) {
 	r.options = store.Options{Nodes: []string{"redis://127.0.0.1:6379"}}
 
 	if err := r.configure(); err != nil {
-		t.Error(err)
-		return
+		t.Fatal(err)
 	}
 
 	key := "myTest"
@@ -104,20 +106,20 @@ func Test_Store(t *testing.T) {
 		Expiry: 2 * time.Minute,
 	}
 
-	err := r.Write(&rec)
+	err := r.Write(ctx, &rec)
 	if err != nil {
-		t.Errorf("Write Erroe. Error: %v", err)
+		t.Fatalf("Write error: %v", err)
 	}
-	rec1, err := r.Read(key)
+	rec1, err := r.Read(ctx, key)
 	if err != nil {
-		t.Errorf("Read Error. Error: %v\n", err)
+		t.Fatalf("Read error: %v\n", err)
 	}
-	err = r.Delete(rec1[0].Key)
+	err = r.Delete(ctx, rec1[0].Key)
 	if err != nil {
-		t.Errorf("Delete error %v\n", err)
+		t.Fatalf("Delete error: %v\n", err)
 	}
-	_, err = r.List()
+	_, err = r.List(ctx)
 	if err != nil {
-		t.Errorf("listing error %v\n", err)
+		t.Fatalf("List error: %v\n", err)
 	}
 }

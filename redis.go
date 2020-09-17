@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/go-redis/redis/v7"
@@ -13,7 +14,7 @@ type rkv struct {
 	Client  *redis.Client
 }
 
-func (r *rkv) Init(opts ...store.Option) error {
+func (r *rkv) Init(ctx context.Context, opts ...store.Option) error {
 	for _, o := range opts {
 		o(&r.options)
 	}
@@ -21,11 +22,11 @@ func (r *rkv) Init(opts ...store.Option) error {
 	return r.configure()
 }
 
-func (r *rkv) Close() error {
+func (r *rkv) Close(ctx context.Context) error {
 	return r.Client.Close()
 }
 
-func (r *rkv) Read(key string, opts ...store.ReadOption) ([]*store.Record, error) {
+func (r *rkv) Read(ctx context.Context, key string, opts ...store.ReadOption) ([]*store.Record, error) {
 	options := store.ReadOptions{}
 	options.Table = r.options.Table
 
@@ -82,7 +83,7 @@ func (r *rkv) Read(key string, opts ...store.ReadOption) ([]*store.Record, error
 	return records, nil
 }
 
-func (r *rkv) Delete(key string, opts ...store.DeleteOption) error {
+func (r *rkv) Delete(ctx context.Context, key string, opts ...store.DeleteOption) error {
 	options := store.DeleteOptions{}
 	options.Table = r.options.Table
 
@@ -94,7 +95,7 @@ func (r *rkv) Delete(key string, opts ...store.DeleteOption) error {
 	return r.Client.Del(rkey).Err()
 }
 
-func (r *rkv) Write(record *store.Record, opts ...store.WriteOption) error {
+func (r *rkv) Write(ctx context.Context, record *store.Record, opts ...store.WriteOption) error {
 	options := store.WriteOptions{}
 	options.Table = r.options.Table
 
@@ -106,7 +107,7 @@ func (r *rkv) Write(record *store.Record, opts ...store.WriteOption) error {
 	return r.Client.Set(rkey, record.Value, record.Expiry).Err()
 }
 
-func (r *rkv) List(opts ...store.ListOption) ([]string, error) {
+func (r *rkv) List(ctx context.Context, opts ...store.ListOption) ([]string, error) {
 	options := store.ListOptions{}
 	options.Table = r.options.Table
 
