@@ -1,120 +1,122 @@
 package redis
 
 import (
+	"context"
 	"fmt"
+	"time"
 
-	"github.com/go-redis/redis/v7"
-	log "github.com/micro/go-micro/v2/logger"
-	"github.com/micro/go-micro/v2/store"
+	"github.com/go-redis/redis/v8"
+	"github.com/unistack-org/micro/v3/store"
 )
 
 type rkv struct {
-	options store.Options
-	Client  *redis.Client
+	opts store.Options
+	cli  redisClient
+}
+
+type redisClient interface {
+	Get(ctx context.Context, key string) *redis.StringCmd
+	Del(ctx context.Context, keys ...string) *redis.IntCmd
+	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
+	Keys(ctx context.Context, pattern string) *redis.StringSliceCmd
+	Exists(ctx context.Context, keys ...string) *redis.IntCmd
+	Close() error
+}
+
+func (r *rkv) Connect(ctx context.Context) error {
+	return nil
 }
 
 func (r *rkv) Init(opts ...store.Option) error {
 	for _, o := range opts {
-		o(&r.options)
+		o(&r.opts)
 	}
 
 	return r.configure()
 }
 
-func (r *rkv) Close() error {
-	return r.Client.Close()
+func (r *rkv) Disconnect(ctx context.Context) error {
+	return r.cli.Close()
 }
 
-func (r *rkv) Read(key string, opts ...store.ReadOption) ([]*store.Record, error) {
-	options := store.ReadOptions{}
-	options.Table = r.options.Table
-
-	for _, o := range opts {
-		o(&options)
+func (r *rkv) Exists(ctx context.Context, key string) error {
+	//options := store.NewReadOptions(opts...)
+	//if len(options.Table) == 0 {
+	//	options.Table = r.opts.Table
+	//}
+	rkey := fmt.Sprintf("%s%s", r.opts.Table, key)
+	err := r.cli.Exists(ctx, rkey).Err()
+	if err != nil {
+		return store.ErrNotFound
 	}
-
-	var keys []string
-
-	rkey := fmt.Sprintf("%s%s", options.Table, key)
-	// Handle Prefix
-	// TODO suffix
-	if options.Prefix {
-		prefixKey := fmt.Sprintf("%s*", rkey)
-		fkeys, err := r.Client.Keys(prefixKey).Result()
-		if err != nil {
-			return nil, err
-		}
-		// TODO Limit Offset
-
-		keys = append(keys, fkeys...)
-
-	} else {
-		keys = []string{rkey}
-	}
-
-	records := make([]*store.Record, 0, len(keys))
-
-	for _, rkey = range keys {
-		val, err := r.Client.Get(rkey).Bytes()
-
-		if err != nil && err == redis.Nil {
-			return nil, store.ErrNotFound
-		} else if err != nil {
-			return nil, err
-		}
-
-		if val == nil {
-			return nil, store.ErrNotFound
-		}
-
-		d, err := r.Client.TTL(rkey).Result()
-		if err != nil {
-			return nil, err
-		}
-
-		records = append(records, &store.Record{
-			Key:    key,
-			Value:  val,
-			Expiry: d,
-		})
-	}
-
-	return records, nil
+	return nil
 }
 
-func (r *rkv) Delete(key string, opts ...store.DeleteOption) error {
-	options := store.DeleteOptions{}
-	options.Table = r.options.Table
-
-	for _, o := range opts {
-		o(&options)
+func (r *rkv) Read(ctx context.Context, key string, val interface{}, opts ...store.ReadOption) error {
+	options := store.NewReadOptions(opts...)
+	if len(options.Table) == 0 {
+		options.Table = r.opts.Table
 	}
 
 	rkey := fmt.Sprintf("%s%s", options.Table, key)
-	return r.Client.Del(rkey).Err()
+	buf, err := r.cli.Get(ctx, rkey).Bytes()
+	if err != nil && err == redis.Nil {
+		return store.ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if buf == nil {
+		return store.ErrNotFound
+	}
+	/*
+			d, err := r.Client.TTL(rkey).Result()
+			if err != nil {
+				return nil, err
+			}
+
+			records = append(records, &store.Record{
+				Key:    key,
+				Value:  val,
+				Expiry: d,
+			})
+		}
+	*/
+	return r.opts.Codec.Unmarshal(buf, val)
 }
 
-func (r *rkv) Write(record *store.Record, opts ...store.WriteOption) error {
-	options := store.WriteOptions{}
-	options.Table = r.options.Table
-
-	for _, o := range opts {
-		o(&options)
+func (r *rkv) Delete(ctx context.Context, key string, opts ...store.DeleteOption) error {
+	options := store.NewDeleteOptions(opts...)
+	if len(options.Table) == 0 {
+		options.Table = r.opts.Table
 	}
 
-	rkey := fmt.Sprintf("%s%s", options.Table, record.Key)
-	return r.Client.Set(rkey, record.Value, record.Expiry).Err()
+	rkey := fmt.Sprintf("%s%s", options.Table, key)
+	return r.cli.Del(ctx, rkey).Err()
 }
 
-func (r *rkv) List(opts ...store.ListOption) ([]string, error) {
-	options := store.ListOptions{}
-	options.Table = r.options.Table
-
-	for _, o := range opts {
-		o(&options)
+func (r *rkv) Write(ctx context.Context, key string, val interface{}, opts ...store.WriteOption) error {
+	options := store.NewWriteOptions(opts...)
+	if len(options.Table) == 0 {
+		options.Table = r.opts.Table
 	}
 
-	keys, err := r.Client.Keys("*").Result()
+	rkey := fmt.Sprintf("%s%s", options.Table, key)
+	buf, err := r.opts.Codec.Marshal(val)
+	if err != nil {
+		return err
+	}
+
+	return r.cli.Set(ctx, rkey, buf, options.TTL).Err()
+}
+
+func (r *rkv) List(ctx context.Context, opts ...store.ListOption) ([]string, error) {
+	options := store.NewListOptions(opts...)
+	if len(options.Table) == 0 {
+		options.Table = r.opts.Table
+	}
+
+	// TODO: add support for prefix/suffix/limit
+	keys, err := r.cli.Keys(ctx, "*").Result()
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +125,7 @@ func (r *rkv) List(opts ...store.ListOption) ([]string, error) {
 }
 
 func (r *rkv) Options() store.Options {
-	return r.options
+	return r.opts
 }
 
 func (r *rkv) String() string {
@@ -131,40 +133,53 @@ func (r *rkv) String() string {
 }
 
 func NewStore(opts ...store.Option) store.Store {
-	var options store.Options
-	for _, o := range opts {
-		o(&options)
-	}
-
-	s := new(rkv)
-	s.options = options
-
-	if err := s.configure(); err != nil {
-		log.Fatal(err)
-	}
-
-	return s
+	return &rkv{opts: store.NewOptions(opts...)}
 }
 
 func (r *rkv) configure() error {
 	var redisOptions *redis.Options
-	nodes := r.options.Nodes
+	var redisClusterOptions *redis.ClusterOptions
+	var err error
+
+	nodes := r.opts.Nodes
 
 	if len(nodes) == 0 {
 		nodes = []string{"redis://127.0.0.1:6379"}
 	}
 
-	redisOptions, err := redis.ParseURL(nodes[0])
-	if err != nil {
-		//Backwards compatibility
-		redisOptions = &redis.Options{
-			Addr:     nodes[0],
-			Password: "", // no password set
-			DB:       0,  // use default DB
+	if r.opts.Context != nil {
+		if c, ok := r.opts.Context.Value(configKey{}).(*redis.Options); ok {
+			redisOptions = c
+		}
+
+		if c, ok := r.opts.Context.Value(clusterConfigKey{}).(*redis.ClusterOptions); ok {
+			redisClusterOptions = c
 		}
 	}
 
-	r.Client = redis.NewClient(redisOptions)
+	if redisOptions != nil && redisClusterOptions != nil {
+		return fmt.Errorf("must specify only one option Config or ClusterConfig")
+	}
+
+	if redisOptions == nil && redisClusterOptions == nil && len(nodes) == 1 {
+		redisOptions, err = redis.ParseURL(nodes[0])
+		if err != nil {
+			//Backwards compatibility
+			redisOptions = &redis.Options{
+				Addr:     nodes[0],
+				Password: "", // no password set
+				DB:       0,  // use default DB
+			}
+		}
+	} else if redisOptions == nil && redisClusterOptions == nil && len(nodes) > 1 {
+		redisClusterOptions = &redis.ClusterOptions{Addrs: nodes}
+	}
+
+	if redisOptions != nil {
+		r.cli = redis.NewClient(redisOptions)
+	} else if redisClusterOptions != nil {
+		r.cli = redis.NewClusterClient(redisClusterOptions)
+	}
 
 	return nil
 }

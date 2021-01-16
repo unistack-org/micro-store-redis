@@ -1,11 +1,8 @@
-module github.com/micro/go-plugins/store/redis/v2
+module github.com/unistack-org/micro-store-redis/v3
 
-go 1.13
+go 1.15
 
 require (
-	github.com/go-redis/redis/v7 v7.4.0
-	github.com/micro/go-micro/v2 v2.9.1-0.20200716153311-f9bf56239306
-	gopkg.in/yaml.v2 v2.2.7 // indirect
+	github.com/go-redis/redis/v8 v8.4.8
+	github.com/unistack-org/micro/v3 v3.1.1
 )
-
-replace github.com/coreos/etcd => github.com/ozonru/etcd v3.3.20-grpc1.27-origmodule+incompatible

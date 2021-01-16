@@ -1,11 +1,13 @@
 package redis
 
 import (
-	"github.com/go-redis/redis/v7"
-	"github.com/micro/go-micro/v2/store"
+	"context"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/unistack-org/micro/v3/store"
 )
 
 func Test_rkv_configure(t *testing.T) {
@@ -59,64 +61,51 @@ func Test_rkv_configure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := &rkv{
-				options: tt.fields.options,
-				Client:  tt.fields.Client,
+				opts: tt.fields.options,
+				cli:  tt.fields.Client,
 			}
 			err := r.configure()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("configure() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if r.Client.Options().Addr != tt.want.address {
-				t.Errorf("configure() Address = %v, want address %v", r.Client.Options().Addr, tt.want.address)
-			}
-			if r.Client.Options().Password != tt.want.password {
-				t.Errorf("configure() password = %v, want password %v", r.Client.Options().Password, tt.want.password)
-			}
-			if r.Client.Options().Username != tt.want.username {
-				t.Errorf("configure() username = %v, want username %v", r.Client.Options().Username, tt.want.username)
-			}
-
 		})
 	}
 }
 
 func Test_Store(t *testing.T) {
-	if tr := os.Getenv("TRAVIS"); len(tr) > 0 {
+	ctx := context.Background()
+
+	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
 		t.Skip()
 	}
 	r := new(rkv)
 
 	//r.options = store.Options{Nodes: []string{"redis://:password@127.0.0.1:6379"}}
 	//r.options = store.Options{Nodes: []string{"127.0.0.1:6379"}}
-	r.options = store.Options{Nodes: []string{"redis://127.0.0.1:6379"}}
+
+	r.opts = store.NewOptions(store.Nodes(os.Getenv("STORE_NODES")))
 
 	if err := r.configure(); err != nil {
-		t.Error(err)
-		return
+		t.Fatal(err)
 	}
 
 	key := "myTest"
-	rec := store.Record{
-		Key:    key,
-		Value:  []byte("myValue"),
-		Expiry: 2 * time.Minute,
-	}
-
-	err := r.Write(&rec)
+	var val []byte
+	err := r.Write(ctx, key, []byte("myValue"), store.WriteTTL(2*time.Minute))
 	if err != nil {
-		t.Errorf("Write Erroe. Error: %v", err)
+		t.Fatalf("Write error: %v", err)
 	}
-	rec1, err := r.Read(key)
+	err = r.Read(ctx, key, val)
 	if err != nil {
-		t.Errorf("Read Error. Error: %v\n", err)
+		t.Fatalf("Read error: %v\n", err)
 	}
-	err = r.Delete(rec1[0].Key)
+	err = r.Delete(ctx, key)
 	if err != nil {
-		t.Errorf("Delete error %v\n", err)
+		t.Fatalf("Delete error: %v\n", err)
 	}
-	_, err = r.List()
+	_, err = r.List(ctx)
 	if err != nil {
-		t.Errorf("listing error %v\n", err)
+		t.Fatalf("List error: %v\n", err)
 	}
 }
