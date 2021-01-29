@@ -39,7 +39,7 @@ func (r *rkv) Disconnect(ctx context.Context) error {
 	return r.cli.Close()
 }
 
-func (r *rkv) Exists(ctx context.Context, key string) error {
+func (r *rkv) Exists(ctx context.Context, key string, opts ...store.ExistsOption) error {
 	//options := store.NewReadOptions(opts...)
 	//if len(options.Table) == 0 {
 	//	options.Table = r.opts.Table
@@ -126,6 +126,10 @@ func (r *rkv) List(ctx context.Context, opts ...store.ListOption) ([]string, err
 
 func (r *rkv) Options() store.Options {
 	return r.opts
+}
+
+func (r *rkv) Name() string {
+	return r.opts.Name
 }
 
 func (r *rkv) String() string {
