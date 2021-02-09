@@ -4,5 +4,5 @@ go 1.15
 
 require (
 	github.com/go-redis/redis/v8 v8.4.11
-	github.com/unistack-org/micro/v3 v3.2.4
+	github.com/unistack-org/micro/v3 v3.2.8
 )
