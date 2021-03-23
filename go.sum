@@ -128,6 +128,8 @@ github.com/unistack-org/micro/v3 v3.2.23 h1:kObNEKxVEioUV29nFRg4Mw4KjIXtzggc67yM
 github.com/unistack-org/micro/v3 v3.2.23/go.mod h1:iJwCWq2PECMxigfqe6TPC5GLWvj6P94Kk+PTVZGL3w8=
 github.com/unistack-org/micro/v3 v3.2.24 h1:3sQ72wy8Vap9KDD7bdLOn+dhlPT0iXSJRXhs2qHoKxA=
 github.com/unistack-org/micro/v3 v3.2.24/go.mod h1:iJwCWq2PECMxigfqe6TPC5GLWvj6P94Kk+PTVZGL3w8=
+github.com/unistack-org/micro/v3 v3.2.26 h1:tWCDuLRb1GDjY2nxbah0jm6n+sBiPxlgcRFXX7n73Q0=
+github.com/unistack-org/micro/v3 v3.2.26/go.mod h1:iJwCWq2PECMxigfqe6TPC5GLWvj6P94Kk+PTVZGL3w8=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 go.opentelemetry.io/otel v0.16.0 h1:uIWEbdeb4vpKPGITLsRVUS44L5oDbDUCZxn8lkxhmgw=
 go.opentelemetry.io/otel v0.16.0/go.mod h1:e4GKElweB8W2gWUqbghw0B8t5MCTccc9212eNHnOHwA=
