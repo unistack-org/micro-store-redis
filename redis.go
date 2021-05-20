@@ -45,8 +45,11 @@ func (r *rkv) Exists(ctx context.Context, key string, opts ...store.ExistsOption
 	//	options.Table = r.opts.Table
 	//}
 	rkey := fmt.Sprintf("%s%s", r.opts.Table, key)
-	err := r.cli.Exists(ctx, rkey).Err()
+	st, err := r.cli.Exists(ctx, rkey).Result()
 	if err != nil {
+		return err
+	}
+	if st == 0 {
 		return store.ErrNotFound
 	}
 	return nil
