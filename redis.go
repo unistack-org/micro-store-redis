@@ -1,4 +1,4 @@
-package redis
+package redis // import "go.unistack.org/micro-store-redis/v3"
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/unistack-org/micro/v3/store"
+	"go.unistack.org/micro/v3/store"
 )
 
 type rkv struct {
