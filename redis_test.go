@@ -27,36 +27,46 @@ func Test_rkv_configure(t *testing.T) {
 		wantErr bool
 		want    wantValues
 	}{
-		{name: "No Url", fields: fields{options: store.Options{}, Client: nil},
+		{
+			name: "No Url", fields: fields{options: store.Options{}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "",
 				address:  "127.0.0.1:6379",
-			}},
-		{name: "legacy Url", fields: fields{options: store.Options{Nodes: []string{"127.0.0.1:6379"}}, Client: nil},
+			},
+		},
+		{
+			name: "legacy Url", fields: fields{options: store.Options{Addrs: []string{"127.0.0.1:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "",
 				address:  "127.0.0.1:6379",
-			}},
-		{name: "New Url", fields: fields{options: store.Options{Nodes: []string{"redis://127.0.0.1:6379"}}, Client: nil},
+			},
+		},
+		{
+			name: "New Url", fields: fields{options: store.Options{Addrs: []string{"redis://127.0.0.1:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "",
 				address:  "127.0.0.1:6379",
-			}},
-		{name: "Url with Pwd", fields: fields{options: store.Options{Nodes: []string{"redis://:password@redis:6379"}}, Client: nil},
+			},
+		},
+		{
+			name: "Url with Pwd", fields: fields{options: store.Options{Addrs: []string{"redis://:password@redis:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "password",
 				address:  "redis:6379",
-			}},
-		{name: "Url with username and Pwd", fields: fields{options: store.Options{Nodes: []string{"redis://username:password@redis:6379"}}, Client: nil},
+			},
+		},
+		{
+			name: "Url with username and Pwd", fields: fields{options: store.Options{Addrs: []string{"redis://username:password@redis:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "username",
 				password: "password",
 				address:  "redis:6379",
-			}},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -81,10 +91,10 @@ func Test_Store(t *testing.T) {
 	}
 	r := new(rkv)
 
-	//r.options = store.Options{Nodes: []string{"redis://:password@127.0.0.1:6379"}}
-	//r.options = store.Options{Nodes: []string{"127.0.0.1:6379"}}
+	// r.options = store.Options{Nodes: []string{"redis://:password@127.0.0.1:6379"}}
+	// r.options = store.Options{Nodes: []string{"127.0.0.1:6379"}}
 
-	r.opts = store.NewOptions(store.Nodes(os.Getenv("STORE_NODES")))
+	r.opts = store.NewOptions(store.Addrs(os.Getenv("STORE_NODES")))
 
 	if err := r.configure(); err != nil {
 		t.Fatal(err)

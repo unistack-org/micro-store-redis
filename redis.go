@@ -40,11 +40,11 @@ func (r *rkv) Disconnect(ctx context.Context) error {
 }
 
 func (r *rkv) Exists(ctx context.Context, key string, opts ...store.ExistsOption) error {
-	//options := store.NewReadOptions(opts...)
-	//if len(options.Table) == 0 {
-	//	options.Table = r.opts.Table
-	//}
-	rkey := fmt.Sprintf("%s%s", r.opts.Table, key)
+	options := store.NewExistsOptions(opts...)
+	if len(options.Namespace) == 0 {
+		options.Namespace = r.opts.Namespace
+	}
+	rkey := fmt.Sprintf("%s%s", options.Namespace, key)
 	st, err := r.cli.Exists(ctx, rkey).Result()
 	if err != nil {
 		return err
@@ -57,11 +57,11 @@ func (r *rkv) Exists(ctx context.Context, key string, opts ...store.ExistsOption
 
 func (r *rkv) Read(ctx context.Context, key string, val interface{}, opts ...store.ReadOption) error {
 	options := store.NewReadOptions(opts...)
-	if len(options.Table) == 0 {
-		options.Table = r.opts.Table
+	if len(options.Namespace) == 0 {
+		options.Namespace = r.opts.Namespace
 	}
 
-	rkey := fmt.Sprintf("%s%s", options.Table, key)
+	rkey := fmt.Sprintf("%s%s", options.Namespace, key)
 	buf, err := r.cli.Get(ctx, rkey).Bytes()
 	if err != nil && err == redis.Nil {
 		return store.ErrNotFound
@@ -89,21 +89,21 @@ func (r *rkv) Read(ctx context.Context, key string, val interface{}, opts ...sto
 
 func (r *rkv) Delete(ctx context.Context, key string, opts ...store.DeleteOption) error {
 	options := store.NewDeleteOptions(opts...)
-	if len(options.Table) == 0 {
-		options.Table = r.opts.Table
+	if len(options.Namespace) == 0 {
+		options.Namespace = r.opts.Namespace
 	}
 
-	rkey := fmt.Sprintf("%s%s", options.Table, key)
+	rkey := fmt.Sprintf("%s%s", options.Namespace, key)
 	return r.cli.Del(ctx, rkey).Err()
 }
 
 func (r *rkv) Write(ctx context.Context, key string, val interface{}, opts ...store.WriteOption) error {
 	options := store.NewWriteOptions(opts...)
-	if len(options.Table) == 0 {
-		options.Table = r.opts.Table
+	if len(options.Namespace) == 0 {
+		options.Namespace = r.opts.Namespace
 	}
 
-	rkey := fmt.Sprintf("%s%s", options.Table, key)
+	rkey := fmt.Sprintf("%s%s", options.Namespace, key)
 	buf, err := r.opts.Codec.Marshal(val)
 	if err != nil {
 		return err
@@ -114,8 +114,8 @@ func (r *rkv) Write(ctx context.Context, key string, val interface{}, opts ...st
 
 func (r *rkv) List(ctx context.Context, opts ...store.ListOption) ([]string, error) {
 	options := store.NewListOptions(opts...)
-	if len(options.Table) == 0 {
-		options.Table = r.opts.Table
+	if len(options.Namespace) == 0 {
+		options.Namespace = r.opts.Namespace
 	}
 
 	// TODO: add support for prefix/suffix/limit
@@ -148,7 +148,7 @@ func (r *rkv) configure() error {
 	var redisClusterOptions *redis.ClusterOptions
 	var err error
 
-	nodes := r.opts.Nodes
+	nodes := r.opts.Addrs
 
 	if len(nodes) == 0 {
 		nodes = []string{"redis://127.0.0.1:6379"}
@@ -171,7 +171,7 @@ func (r *rkv) configure() error {
 	if redisOptions == nil && redisClusterOptions == nil && len(nodes) == 1 {
 		redisOptions, err = redis.ParseURL(nodes[0])
 		if err != nil {
-			//Backwards compatibility
+			// Backwards compatibility
 			redisOptions = &redis.Options{
 				Addr:     nodes[0],
 				Password: "", // no password set
