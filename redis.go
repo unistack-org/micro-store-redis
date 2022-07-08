@@ -14,6 +14,7 @@ type rkv struct {
 	cli  redisClient
 }
 
+// TODO: add ability to set some redis options https://pkg.go.dev/github.com/go-redis/redis/v8#Options
 type redisClient interface {
 	Get(ctx context.Context, key string) *redis.StringCmd
 	Del(ctx context.Context, keys ...string) *redis.IntCmd
@@ -44,6 +45,11 @@ func (r *rkv) Exists(ctx context.Context, key string, opts ...store.ExistsOption
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
 	}
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
 	rkey := fmt.Sprintf("%s%s", options.Namespace, key)
 	st, err := r.cli.Exists(ctx, rkey).Result()
 	if err != nil {
@@ -60,7 +66,11 @@ func (r *rkv) Read(ctx context.Context, key string, val interface{}, opts ...sto
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
 	}
-
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
 	rkey := fmt.Sprintf("%s%s", options.Namespace, key)
 	buf, err := r.cli.Get(ctx, rkey).Bytes()
 	if err != nil && err == redis.Nil {
@@ -92,7 +102,11 @@ func (r *rkv) Delete(ctx context.Context, key string, opts ...store.DeleteOption
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
 	}
-
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
 	rkey := fmt.Sprintf("%s%s", options.Namespace, key)
 	return r.cli.Del(ctx, rkey).Err()
 }
@@ -108,7 +122,11 @@ func (r *rkv) Write(ctx context.Context, key string, val interface{}, opts ...st
 	if err != nil {
 		return err
 	}
-
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
 	return r.cli.Set(ctx, rkey, buf, options.TTL).Err()
 }
 
@@ -117,7 +135,11 @@ func (r *rkv) List(ctx context.Context, opts ...store.ListOption) ([]string, err
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
 	}
-
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
 	// TODO: add support for prefix/suffix/limit
 	keys, err := r.cli.Keys(ctx, "*").Result()
 	if err != nil {
