@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"testing"
@@ -89,33 +90,143 @@ func Test_Store(t *testing.T) {
 	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
 		t.Skip()
 	}
-	r := new(rkv)
+	r := NewStore(store.Addrs(os.Getenv("STORE_NODES")))
 
-	// r.options = store.Options{Nodes: []string{"redis://:password@127.0.0.1:6379"}}
-	// r.options = store.Options{Nodes: []string{"127.0.0.1:6379"}}
-
-	r.opts = store.NewOptions(store.Addrs(os.Getenv("STORE_NODES")))
-
-	if err := r.configure(); err != nil {
+	if err := r.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Connect(ctx); err != nil {
 		t.Fatal(err)
 	}
 
 	key := "myTest"
+	tval := []byte("myValue")
 	var val []byte
-	err := r.Write(ctx, key, []byte("myValue"), store.WriteTTL(2*time.Minute))
+	err := r.Write(ctx, key, tval, store.WriteTTL(2*time.Minute))
 	if err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	err = r.Read(ctx, key, val)
+	err = r.Read(ctx, key, &val)
 	if err != nil {
 		t.Fatalf("Read error: %v\n", err)
+	} else if !bytes.Equal(val, tval) {
+		t.Fatalf("read err: data not eq")
 	}
+	keys, err := r.List(ctx)
+	if err != nil {
+		t.Fatalf("List error: %v\n", err)
+	}
+	_ = keys
 	err = r.Delete(ctx, key)
 	if err != nil {
 		t.Fatalf("Delete error: %v\n", err)
 	}
-	_, err = r.List(ctx)
+	// t.Logf("%v", keys)
+}
+
+func Test_MRead(t *testing.T) {
+	ctx := context.Background()
+	var err error
+	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
+		t.Skip()
+	}
+	r := NewStore(store.Addrs(os.Getenv("STORE_NODES")))
+
+	if err = r.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	key1 := "myTest1"
+	key2 := "myTest2"
+	tval1 := []byte("myValue1")
+	tval2 := []byte("myValue2")
+	var vals [][]byte
+	err = r.Write(ctx, key1, tval1, store.WriteTTL(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	err = r.Write(ctx, key2, tval2, store.WriteTTL(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	err = r.MRead(ctx, []string{key1, key2}, &vals)
+	if err != nil {
+		t.Fatalf("Read error: %v\n", err)
+	}
+	// t.Logf("%s", vals)
+	_ = vals
+	keys, err := r.List(ctx)
 	if err != nil {
 		t.Fatalf("List error: %v\n", err)
 	}
+	_ = keys
+	// t.Logf("%v", keys)
+	err = r.Delete(ctx, key1)
+	if err != nil {
+		t.Fatalf("Delete error: %v\n", err)
+	}
+	err = r.Delete(ctx, key2)
+	if err != nil {
+		t.Fatalf("Delete error: %v\n", err)
+	}
 }
+
+/*
+func Test_MReadCodec(t *testing.T) {
+	type mytype struct {
+		Key string `json:"name"`
+		Val string `json:"val"`
+	}
+	ctx := context.Background()
+	var err error
+	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
+		t.Skip()
+	}
+	r := NewStore(store.Nodes(os.Getenv("STORE_NODES")), store.Codec(jsoncodec.NewCodec()))
+
+	if err = r.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	key1 := "myTest1"
+	key2 := "myTest2"
+	key3 := "myTest3"
+	tval1 := &mytype{Key: "key1", Val: "val1"}
+	tval2 := &mytype{Key: "key2", Val: "val2"}
+	var vals []*mytype
+	err = r.Write(ctx, key1, tval1, store.WriteTTL(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	err = r.Write(ctx, key2, tval2, store.WriteTTL(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	err = r.MRead(ctx, []string{key1, key3, key2}, &vals)
+	if err != nil {
+		t.Fatalf("Read error: %v\n", err)
+	}
+	if vals[0].Key != "key1" || vals[1] != nil || vals[2].Key != "key2" {
+		t.Fatalf("read err: struct not filled")
+	}
+	keys, err := r.List(ctx)
+	if err != nil {
+		t.Fatalf("List error: %v\n", err)
+	}
+	_ = keys
+	err = r.Delete(ctx, key1)
+	if err != nil {
+		t.Fatalf("Delete error: %v\n", err)
+	}
+	err = r.Delete(ctx, key2)
+	if err != nil {
+		t.Fatalf("Delete error: %v\n", err)
+	}
+}
+*/
