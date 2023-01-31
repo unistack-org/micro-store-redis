@@ -263,10 +263,16 @@ func (r *rkv) configure() error {
 	if r.opts.Context != nil {
 		if c, ok := r.opts.Context.Value(configKey{}).(*redis.Options); ok {
 			redisOptions = c
+			if r.opts.TLSConfig != nil {
+				redisOptions.TLSConfig = r.opts.TLSConfig
+			}
 		}
 
 		if c, ok := r.opts.Context.Value(clusterConfigKey{}).(*redis.ClusterOptions); ok {
 			redisClusterOptions = c
+			if r.opts.TLSConfig != nil {
+				redisClusterOptions.TLSConfig = r.opts.TLSConfig
+			}
 		}
 	}
 
@@ -279,13 +285,34 @@ func (r *rkv) configure() error {
 		if err != nil {
 			// Backwards compatibility
 			redisOptions = &redis.Options{
-				Addr:     nodes[0],
-				Password: "", // no password set
-				DB:       0,  // use default DB
+				Addr:            nodes[0],
+				Password:        "", // no password set
+				DB:              0,  // use default DB
+				MaxRetries:      2,
+				MaxRetryBackoff: 256 * time.Millisecond,
+				DialTimeout:     1 * time.Second,
+				ReadTimeout:     1 * time.Second,
+				WriteTimeout:    1 * time.Second,
+				PoolTimeout:     1 * time.Second,
+				IdleTimeout:     20 * time.Second,
+				MinIdleConns:    10,
+				TLSConfig:       r.opts.TLSConfig,
 			}
 		}
 	} else if redisOptions == nil && redisClusterOptions == nil && len(nodes) > 1 {
-		redisClusterOptions = &redis.ClusterOptions{Addrs: nodes}
+		redisClusterOptions = &redis.ClusterOptions{
+			Addrs:           nodes,
+			Password:        "", // no password set
+			MaxRetries:      2,
+			MaxRetryBackoff: 256 * time.Millisecond,
+			DialTimeout:     1 * time.Second,
+			ReadTimeout:     1 * time.Second,
+			WriteTimeout:    1 * time.Second,
+			PoolTimeout:     1 * time.Second,
+			IdleTimeout:     20 * time.Second,
+			MinIdleConns:    10,
+			TLSConfig:       r.opts.TLSConfig,
+		}
 	}
 
 	if redisOptions != nil {
