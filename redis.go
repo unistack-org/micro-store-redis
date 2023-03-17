@@ -260,6 +260,10 @@ func (r *rkv) configure() error {
 		nodes = []string{"redis://127.0.0.1:6379"}
 	}
 
+	if r.cli != nil && r.opts.Context == nil {
+		return nil
+	}
+
 	if r.opts.Context != nil {
 		if c, ok := r.opts.Context.Value(configKey{}).(*redis.Options); ok {
 			redisOptions = c
@@ -280,12 +284,17 @@ func (r *rkv) configure() error {
 		return fmt.Errorf("must specify only one option Config or ClusterConfig")
 	}
 
+	if redisOptions == nil && redisClusterOptions == nil && r.cli != nil {
+		return nil
+	}
+
 	if redisOptions == nil && redisClusterOptions == nil && len(nodes) == 1 {
 		redisOptions, err = redis.ParseURL(nodes[0])
 		if err != nil {
 			// Backwards compatibility
 			redisOptions = &redis.Options{
 				Addr:            nodes[0],
+				Username:        "",
 				Password:        "", // no password set
 				DB:              0,  // use default DB
 				MaxRetries:      2,
@@ -302,6 +311,7 @@ func (r *rkv) configure() error {
 	} else if redisOptions == nil && redisClusterOptions == nil && len(nodes) > 1 {
 		redisClusterOptions = &redis.ClusterOptions{
 			Addrs:           nodes,
+			Username:        "",
 			Password:        "", // no password set
 			MaxRetries:      2,
 			MaxRetryBackoff: 256 * time.Millisecond,
