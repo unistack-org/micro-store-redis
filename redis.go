@@ -166,6 +166,25 @@ func (r *rkv) MRead(ctx context.Context, keys []string, vals interface{}, opts .
 	return nil
 }
 
+func (r *rkv) MDelete(ctx context.Context, keys []string, opts ...store.DeleteOption) error {
+	options := store.NewDeleteOptions(opts...)
+	if len(options.Namespace) == 0 {
+		options.Namespace = r.opts.Namespace
+	}
+	if options.Namespace == "" {
+		return r.cli.Del(ctx, keys...).Err()
+	}
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
+	for idx := range keys {
+		keys[idx] = options.Namespace + keys[idx]
+	}
+	return r.cli.Del(ctx, keys...).Err()
+}
+
 func (r *rkv) Delete(ctx context.Context, key string, opts ...store.DeleteOption) error {
 	options := store.NewDeleteOptions(opts...)
 	if len(options.Namespace) == 0 {
