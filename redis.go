@@ -1,4 +1,4 @@
-package redis // import "go.unistack.org/micro-store-redis/v3"
+package redis
 
 import (
 	"context"
@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"go.unistack.org/micro/v3/store"
 )
 
-type rkv struct {
+type Store struct {
 	opts store.Options
 	cli  redisClient
 }
@@ -25,14 +25,16 @@ type redisClient interface {
 	MSet(ctx context.Context, kv ...interface{}) *redis.StatusCmd
 	Exists(ctx context.Context, keys ...string) *redis.IntCmd
 	Ping(ctx context.Context) *redis.StatusCmd
+	Pipeline() redis.Pipeliner
+	Pipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error)
 	Close() error
 }
 
-func (r *rkv) Connect(ctx context.Context) error {
+func (r *Store) Connect(ctx context.Context) error {
 	return r.cli.Ping(ctx).Err()
 }
 
-func (r *rkv) Init(opts ...store.Option) error {
+func (r *Store) Init(opts ...store.Option) error {
 	for _, o := range opts {
 		o(&r.opts)
 	}
@@ -40,22 +42,22 @@ func (r *rkv) Init(opts ...store.Option) error {
 	return r.configure()
 }
 
-func (r *rkv) Disconnect(ctx context.Context) error {
+func (r *Store) Disconnect(ctx context.Context) error {
 	return r.cli.Close()
 }
 
-func (r *rkv) Exists(ctx context.Context, key string, opts ...store.ExistsOption) error {
+func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOption) error {
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
 	options := store.NewExistsOptions(opts...)
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
 	}
 	if options.Namespace != "" {
 		key = fmt.Sprintf("%s%s", r.opts.Namespace, key)
-	}
-	if r.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
-		defer cancel()
 	}
 	val, err := r.cli.Exists(ctx, key).Result()
 	if err != nil {
@@ -67,7 +69,12 @@ func (r *rkv) Exists(ctx context.Context, key string, opts ...store.ExistsOption
 	return nil
 }
 
-func (r *rkv) Read(ctx context.Context, key string, val interface{}, opts ...store.ReadOption) error {
+func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...store.ReadOption) error {
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
 	options := store.NewReadOptions(opts...)
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
@@ -75,11 +82,7 @@ func (r *rkv) Read(ctx context.Context, key string, val interface{}, opts ...sto
 	if options.Namespace != "" {
 		key = fmt.Sprintf("%s%s", options.Namespace, key)
 	}
-	if r.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
-		defer cancel()
-	}
+
 	buf, err := r.cli.Get(ctx, key).Bytes()
 	if err != nil && err == redis.Nil {
 		return store.ErrNotFound
@@ -92,13 +95,18 @@ func (r *rkv) Read(ctx context.Context, key string, val interface{}, opts ...sto
 	return r.opts.Codec.Unmarshal(buf, val)
 }
 
-func (r *rkv) MRead(ctx context.Context, keys []string, vals interface{}, opts ...store.ReadOption) error {
+func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts ...store.ReadOption) error {
 	if len(keys) == 1 {
 		vt := reflect.ValueOf(vals)
 		if vt.Kind() == reflect.Ptr {
 			vt = reflect.Indirect(vt)
 			return r.Read(ctx, keys[0], vt.Index(0).Interface(), opts...)
 		}
+	}
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
 	}
 	options := store.NewReadOptions(opts...)
 	rkeys := make([]string, 0, len(keys))
@@ -112,11 +120,7 @@ func (r *rkv) MRead(ctx context.Context, keys []string, vals interface{}, opts .
 			rkeys = append(rkeys, key)
 		}
 	}
-	if r.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
-		defer cancel()
-	}
+
 	rvals, err := r.cli.MGet(ctx, rkeys...).Result()
 	if err != nil && err == redis.Nil {
 		return store.ErrNotFound
@@ -166,7 +170,15 @@ func (r *rkv) MRead(ctx context.Context, keys []string, vals interface{}, opts .
 	return nil
 }
 
-func (r *rkv) MDelete(ctx context.Context, keys []string, opts ...store.DeleteOption) error {
+func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.DeleteOption) error {
+	if len(keys) == 1 {
+		return r.Delete(ctx, keys[0], opts...)
+	}
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
 	options := store.NewDeleteOptions(opts...)
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
@@ -174,18 +186,18 @@ func (r *rkv) MDelete(ctx context.Context, keys []string, opts ...store.DeleteOp
 	if options.Namespace == "" {
 		return r.cli.Del(ctx, keys...).Err()
 	}
-	if r.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
-		defer cancel()
-	}
 	for idx := range keys {
 		keys[idx] = options.Namespace + keys[idx]
 	}
 	return r.cli.Del(ctx, keys...).Err()
 }
 
-func (r *rkv) Delete(ctx context.Context, key string, opts ...store.DeleteOption) error {
+func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOption) error {
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
 	options := store.NewDeleteOptions(opts...)
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
@@ -193,35 +205,99 @@ func (r *rkv) Delete(ctx context.Context, key string, opts ...store.DeleteOption
 	if options.Namespace == "" {
 		return r.cli.Del(ctx, key).Err()
 	}
+	return r.cli.Del(ctx, fmt.Sprintf("%s%s", options.Namespace, key)).Err()
+}
+
+func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, opts ...store.WriteOption) error {
+	if len(keys) == 1 {
+		return r.Write(ctx, keys[0], vals[0], opts...)
+	}
 	if r.opts.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
 		defer cancel()
 	}
-	return r.cli.Del(ctx, fmt.Sprintf("%s%s", options.Namespace, key)).Err()
+	options := store.NewWriteOptions(opts...)
+	kvs := make([]string, 0, len(keys)*2)
+
+	if len(options.Namespace) == 0 {
+		options.Namespace = r.opts.Namespace
+	}
+
+	for idx, key := range keys {
+		if options.Namespace != "" {
+			kvs = append(kvs, fmt.Sprintf("%s%s", options.Namespace, key))
+		} else {
+			kvs = append(kvs, key)
+		}
+
+		switch vt := vals[idx].(type) {
+		case string:
+			kvs = append(kvs, vt)
+		case []byte:
+			kvs = append(kvs, string(vt))
+		default:
+			buf, err := r.opts.Codec.Marshal(vt)
+			if err != nil {
+				return err
+			}
+			kvs = append(kvs, string(buf))
+		}
+	}
+
+	cmds, err := r.cli.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for idx := 0; idx < len(kvs); idx += 2 {
+			pipe.Set(ctx, kvs[idx], kvs[idx+1], options.TTL).Result()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, cmd := range cmds {
+		if err = cmd.Err(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
-func (r *rkv) Write(ctx context.Context, key string, val interface{}, opts ...store.WriteOption) error {
+func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...store.WriteOption) error {
+	if r.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		defer cancel()
+	}
+
 	options := store.NewWriteOptions(opts...)
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
 	}
-	buf, err := r.opts.Codec.Marshal(val)
-	if err != nil {
-		return err
+
+	var buf []byte
+	switch vt := val.(type) {
+	case string:
+		buf = []byte(vt)
+	case []byte:
+		buf = vt
+	default:
+		var err error
+		buf, err = r.opts.Codec.Marshal(val)
+		if err != nil {
+			return err
+		}
 	}
+
 	if options.Namespace != "" {
 		key = fmt.Sprintf("%s%s", options.Namespace, key)
 	}
-	if r.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
-		defer cancel()
-	}
+
 	return r.cli.Set(ctx, key, buf, options.TTL).Err()
 }
 
-func (r *rkv) List(ctx context.Context, opts ...store.ListOption) ([]string, error) {
+func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, error) {
 	options := store.NewListOptions(opts...)
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
@@ -252,23 +328,23 @@ func (r *rkv) List(ctx context.Context, opts ...store.ListOption) ([]string, err
 	return nkeys, nil
 }
 
-func (r *rkv) Options() store.Options {
+func (r *Store) Options() store.Options {
 	return r.opts
 }
 
-func (r *rkv) Name() string {
+func (r *Store) Name() string {
 	return r.opts.Name
 }
 
-func (r *rkv) String() string {
+func (r *Store) String() string {
 	return "redis"
 }
 
-func NewStore(opts ...store.Option) *rkv {
-	return &rkv{opts: store.NewOptions(opts...)}
+func NewStore(opts ...store.Option) *Store {
+	return &Store{opts: store.NewOptions(opts...)}
 }
 
-func (r *rkv) configure() error {
+func (r *Store) configure() error {
 	var redisOptions *redis.Options
 	var redisClusterOptions *redis.ClusterOptions
 	var err error
@@ -322,7 +398,6 @@ func (r *rkv) configure() error {
 				ReadTimeout:     1 * time.Second,
 				WriteTimeout:    1 * time.Second,
 				PoolTimeout:     1 * time.Second,
-				IdleTimeout:     20 * time.Second,
 				MinIdleConns:    10,
 				TLSConfig:       r.opts.TLSConfig,
 			}
@@ -338,7 +413,6 @@ func (r *rkv) configure() error {
 			ReadTimeout:     1 * time.Second,
 			WriteTimeout:    1 * time.Second,
 			PoolTimeout:     1 * time.Second,
-			IdleTimeout:     20 * time.Second,
 			MinIdleConns:    10,
 			TLSConfig:       r.opts.TLSConfig,
 		}
