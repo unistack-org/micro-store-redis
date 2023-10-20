@@ -8,7 +8,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"go.unistack.org/micro/v3/store"
+	"go.unistack.org/micro/v4/options"
+	"go.unistack.org/micro/v4/store"
 )
 
 type Store struct {
@@ -34,7 +35,7 @@ func (r *Store) Connect(ctx context.Context) error {
 	return r.cli.Ping(ctx).Err()
 }
 
-func (r *Store) Init(opts ...store.Option) error {
+func (r *Store) Init(opts ...options.Option) error {
 	for _, o := range opts {
 		o(&r.opts)
 	}
@@ -46,7 +47,7 @@ func (r *Store) Disconnect(ctx context.Context) error {
 	return r.cli.Close()
 }
 
-func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOption) error {
+func (r *Store) Exists(ctx context.Context, key string, opts ...options.Option) error {
 	if r.opts.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
@@ -69,7 +70,7 @@ func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOpti
 	return nil
 }
 
-func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...store.ReadOption) error {
+func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...options.Option) error {
 	if r.opts.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
@@ -95,7 +96,7 @@ func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...s
 	return r.opts.Codec.Unmarshal(buf, val)
 }
 
-func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts ...store.ReadOption) error {
+func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts ...options.Option) error {
 	if len(keys) == 1 {
 		vt := reflect.ValueOf(vals)
 		if vt.Kind() == reflect.Ptr {
@@ -170,7 +171,7 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 	return nil
 }
 
-func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.DeleteOption) error {
+func (r *Store) MDelete(ctx context.Context, keys []string, opts ...options.Option) error {
 	if len(keys) == 1 {
 		return r.Delete(ctx, keys[0], opts...)
 	}
@@ -192,7 +193,7 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 	return r.cli.Del(ctx, keys...).Err()
 }
 
-func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOption) error {
+func (r *Store) Delete(ctx context.Context, key string, opts ...options.Option) error {
 	if r.opts.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
@@ -208,7 +209,7 @@ func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOpti
 	return r.cli.Del(ctx, fmt.Sprintf("%s%s", options.Namespace, key)).Err()
 }
 
-func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, opts ...store.WriteOption) error {
+func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, opts ...options.Option) error {
 	if len(keys) == 1 {
 		return r.Write(ctx, keys[0], vals[0], opts...)
 	}
@@ -264,7 +265,7 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 	return nil
 }
 
-func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...store.WriteOption) error {
+func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...options.Option) error {
 	if r.opts.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
@@ -297,7 +298,7 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 	return r.cli.Set(ctx, key, buf, options.TTL).Err()
 }
 
-func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, error) {
+func (r *Store) List(ctx context.Context, opts ...options.Option) ([]string, error) {
 	options := store.NewListOptions(opts...)
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
@@ -340,7 +341,7 @@ func (r *Store) String() string {
 	return "redis"
 }
 
-func NewStore(opts ...store.Option) *Store {
+func NewStore(opts ...options.Option) *Store {
 	return &Store{opts: store.NewOptions(opts...)}
 }
 
@@ -349,7 +350,7 @@ func (r *Store) configure() error {
 	var redisClusterOptions *redis.ClusterOptions
 	var err error
 
-	nodes := r.opts.Addrs
+	nodes := r.opts.Address
 
 	if len(nodes) == 0 {
 		nodes = []string{"redis://127.0.0.1:6379"}

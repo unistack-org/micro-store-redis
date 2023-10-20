@@ -2,17 +2,17 @@ package redis
 
 import (
 	"github.com/redis/go-redis/v9"
-	"go.unistack.org/micro/v3/store"
+	"go.unistack.org/micro/v4/options"
 )
 
 type configKey struct{}
 
-func Config(c *redis.Options) store.Option {
-	return store.SetOption(configKey{}, c)
+func Config(c *redis.Options) options.Option {
+	return options.ContextOption(configKey{}, c)
 }
 
 type clusterConfigKey struct{}
 
-func ClusterConfig(c *redis.ClusterOptions) store.Option {
-	return store.SetOption(clusterConfigKey{}, c)
+func ClusterConfig(c *redis.ClusterOptions) options.Option {
+	return options.ContextOption(clusterConfigKey{}, c)
 }
