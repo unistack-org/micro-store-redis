@@ -71,11 +71,11 @@ func Test_rkv_configure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &rkv{
+			rc := &Store{
 				opts: tt.fields.options,
 				cli:  tt.fields.Client,
 			}
-			err := r.configure()
+			err := rc.configure()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("configure() error = %v, wantErr %v", err, tt.wantErr)
 				return
