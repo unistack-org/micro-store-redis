@@ -43,6 +43,10 @@ func (r *Store) Init(opts ...options.Option) error {
 	return r.configure()
 }
 
+func (r *Store) Redis() *redis.Client {
+	return r.cli.(*redis.Client)
+}
+
 func (r *Store) Disconnect(ctx context.Context) error {
 	return r.cli.Close()
 }
