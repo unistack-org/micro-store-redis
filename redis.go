@@ -7,13 +7,45 @@ import (
 	"strings"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	redis "github.com/redis/go-redis/v9"
+	"go.unistack.org/micro/v3/semconv"
 	"go.unistack.org/micro/v3/store"
+	pool "go.unistack.org/micro/v3/util/xpool"
+)
+
+var (
+	DefaultPathSeparator = "/"
+
+	DefaultClusterOptions = &redis.ClusterOptions{
+		Username:        "",
+		Password:        "", // no password set
+		MaxRetries:      2,
+		MaxRetryBackoff: 256 * time.Millisecond,
+		DialTimeout:     1 * time.Second,
+		ReadTimeout:     1 * time.Second,
+		WriteTimeout:    1 * time.Second,
+		PoolTimeout:     1 * time.Second,
+		MinIdleConns:    10,
+	}
+
+	DefaultOptions = &redis.Options{
+		Username:        "",
+		Password:        "", // no password set
+		DB:              0,  // use default DB
+		MaxRetries:      2,
+		MaxRetryBackoff: 256 * time.Millisecond,
+		DialTimeout:     1 * time.Second,
+		ReadTimeout:     1 * time.Second,
+		WriteTimeout:    1 * time.Second,
+		PoolTimeout:     1 * time.Second,
+		MinIdleConns:    10,
+	}
 )
 
 type Store struct {
 	opts store.Options
 	cli  redisClient
+	pool pool.Pool[strings.Builder]
 }
 
 type redisClient interface {
@@ -51,88 +83,121 @@ func (r *Store) Disconnect(ctx context.Context) error {
 }
 
 func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOption) error {
-	if r.opts.Timeout > 0 {
+	options := store.NewExistsOptions(opts...)
+
+	timeout := r.opts.Timeout
+	if options.Timeout > 0 {
+		timeout = options.Timeout
+	}
+
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	options := store.NewExistsOptions(opts...)
-	if len(options.Namespace) == 0 {
-		options.Namespace = r.opts.Namespace
-	}
-	if options.Namespace != "" {
-		key = fmt.Sprintf("%s%s", r.opts.Namespace, key)
-	}
-	val, err := r.cli.Exists(ctx, key).Result()
-	if err != nil {
+
+	rkey := r.getKey(r.opts.Namespace, options.Namespace, key)
+	ctx, sp := r.opts.Tracer.Start(ctx, "cache read "+rkey)
+	defer sp.Finish()
+
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Inc()
+	ts := time.Now()
+	val, err := r.cli.Exists(ctx, rkey).Result()
+	te := time.Since(ts)
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Dec()
+	r.opts.Meter.Summary(semconv.CacheRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.CacheRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	if err == redis.Nil || (err == nil && val == 0) {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "miss").Inc()
+		return store.ErrNotFound
+	} else if err == nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "hit").Inc()
+	} else if err != nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
-	if val == 0 {
-		return store.ErrNotFound
-	}
+
 	return nil
 }
 
 func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...store.ReadOption) error {
-	if r.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
-		defer cancel()
-	}
 	options := store.NewReadOptions(opts...)
-	if len(options.Namespace) == 0 {
-		options.Namespace = r.opts.Namespace
-	}
-	if options.Namespace != "" {
-		key = fmt.Sprintf("%s%s", options.Namespace, key)
+
+	timeout := r.opts.Timeout
+	if options.Timeout > 0 {
+		timeout = options.Timeout
 	}
 
-	buf, err := r.cli.Get(ctx, key).Bytes()
-	if err != nil && err == redis.Nil {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Inc()
+	ts := time.Now()
+	buf, err := r.cli.Get(ctx, r.getKey(r.opts.Namespace, options.Namespace, key)).Bytes()
+	te := time.Since(ts)
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Dec()
+	r.opts.Meter.Summary(semconv.CacheRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.CacheRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	if err == redis.Nil || (err == nil && buf == nil) {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return store.ErrNotFound
+	} else if err == nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
-	if buf == nil {
-		return store.ErrNotFound
+
+	switch b := val.(type) {
+	case *[]byte:
+		*b = buf
+	case *string:
+		*b = string(buf)
+	default:
+		err = r.opts.Codec.Unmarshal(buf, val)
 	}
-	return r.opts.Codec.Unmarshal(buf, val)
+
+	return err
 }
 
 func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts ...store.ReadOption) error {
-	if len(keys) == 1 {
-		vt := reflect.ValueOf(vals)
-		if vt.Kind() == reflect.Ptr {
-			vt = reflect.Indirect(vt)
-			return r.Read(ctx, keys[0], vt.Index(0).Interface(), opts...)
-		}
+	options := store.NewReadOptions(opts...)
+
+	timeout := r.opts.Timeout
+	if options.Timeout > 0 {
+		timeout = options.Timeout
 	}
-	if r.opts.Timeout > 0 {
+
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	options := store.NewReadOptions(opts...)
-	rkeys := make([]string, 0, len(keys))
-	if len(options.Namespace) == 0 {
-		options.Namespace = r.opts.Namespace
-	}
-	for _, key := range keys {
-		if options.Namespace != "" {
-			rkeys = append(rkeys, fmt.Sprintf("%s%s", options.Namespace, key))
-		} else {
-			rkeys = append(rkeys, key)
+
+	if r.opts.Namespace != "" || options.Namespace != "" {
+		for idx, key := range keys {
+			keys[idx] = r.getKey(r.opts.Namespace, options.Namespace, key)
 		}
 	}
 
-	rvals, err := r.cli.MGet(ctx, rkeys...).Result()
-	if err != nil && err == redis.Nil {
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Inc()
+	ts := time.Now()
+	rvals, err := r.cli.MGet(ctx, keys...).Result()
+	te := time.Since(ts)
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Dec()
+	r.opts.Meter.Summary(semconv.CacheRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.CacheRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	if err == redis.Nil || (len(rvals) == 0) {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return store.ErrNotFound
+	} else if err == nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
-	}
-	if len(rvals) == 0 {
-		return store.ErrNotFound
 	}
 
 	vv := reflect.ValueOf(vals)
@@ -163,9 +228,14 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 		// special case for raw data
 		if vt.Kind() == reflect.Slice && vt.Elem().Kind() == reflect.Uint8 {
 			itm.Set(reflect.MakeSlice(itm.Type(), len(buf), len(buf)))
-		} else {
-			itm.Set(reflect.New(vt.Elem()))
+			itm.SetBytes(buf)
+			continue
+		} else if vt.Kind() == reflect.String {
+			itm.SetString(string(buf))
+			continue
 		}
+
+		itm.Set(reflect.New(vt.Elem()))
 		if err = r.opts.Codec.Unmarshal(buf, itm.Interface()); err != nil {
 			return err
 		}
@@ -175,65 +245,97 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 }
 
 func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.DeleteOption) error {
-	if len(keys) == 1 {
-		return r.Delete(ctx, keys[0], opts...)
+	options := store.NewDeleteOptions(opts...)
+
+	timeout := r.opts.Timeout
+	if options.Timeout > 0 {
+		timeout = options.Timeout
 	}
-	if r.opts.Timeout > 0 {
+
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	options := store.NewDeleteOptions(opts...)
-	if len(options.Namespace) == 0 {
-		options.Namespace = r.opts.Namespace
+
+	if r.opts.Namespace != "" || options.Namespace != "" {
+		for idx, key := range keys {
+			keys[idx] = r.getKey(r.opts.Namespace, options.Namespace, key)
+		}
 	}
-	if options.Namespace == "" {
-		return r.cli.Del(ctx, keys...).Err()
+
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Inc()
+	ts := time.Now()
+	err := r.cli.Del(ctx, keys...).Err()
+	te := time.Since(ts)
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Dec()
+	r.opts.Meter.Summary(semconv.CacheRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.CacheRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	if err == redis.Nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "miss").Inc()
+		return store.ErrNotFound
+	} else if err == nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "hit").Inc()
+	} else if err != nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "failure").Inc()
+		return err
 	}
-	for idx := range keys {
-		keys[idx] = options.Namespace + keys[idx]
-	}
-	return r.cli.Del(ctx, keys...).Err()
+
+	return nil
 }
 
 func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOption) error {
-	if r.opts.Timeout > 0 {
+	options := store.NewDeleteOptions(opts...)
+
+	timeout := r.opts.Timeout
+	if options.Timeout > 0 {
+		timeout = options.Timeout
+	}
+
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	options := store.NewDeleteOptions(opts...)
-	if len(options.Namespace) == 0 {
-		options.Namespace = r.opts.Namespace
+
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Inc()
+	ts := time.Now()
+	err := r.cli.Del(ctx, r.getKey(r.opts.Namespace, options.Namespace, key)).Err()
+	te := time.Since(ts)
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Dec()
+	r.opts.Meter.Summary(semconv.CacheRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.CacheRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	if err == redis.Nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "miss").Inc()
+		return store.ErrNotFound
+	} else if err == nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "hit").Inc()
+	} else if err != nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "failure").Inc()
+		return err
 	}
-	if options.Namespace == "" {
-		return r.cli.Del(ctx, key).Err()
-	}
-	return r.cli.Del(ctx, fmt.Sprintf("%s%s", options.Namespace, key)).Err()
+
+	return nil
 }
 
 func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, opts ...store.WriteOption) error {
-	if len(keys) == 1 {
-		return r.Write(ctx, keys[0], vals[0], opts...)
+	options := store.NewWriteOptions(opts...)
+
+	timeout := r.opts.Timeout
+	if options.Timeout > 0 {
+		timeout = options.Timeout
 	}
-	if r.opts.Timeout > 0 {
+
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	options := store.NewWriteOptions(opts...)
+
 	kvs := make([]string, 0, len(keys)*2)
 
-	if len(options.Namespace) == 0 {
-		options.Namespace = r.opts.Namespace
-	}
-
 	for idx, key := range keys {
-		if options.Namespace != "" {
-			kvs = append(kvs, fmt.Sprintf("%s%s", options.Namespace, key))
-		} else {
-			kvs = append(kvs, key)
-		}
+		kvs = append(kvs, r.getKey(r.opts.Namespace, options.Namespace, key))
 
 		switch vt := vals[idx].(type) {
 		case string:
@@ -249,18 +351,39 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 		}
 	}
 
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Inc()
+	ts := time.Now()
+
 	cmds, err := r.cli.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 		for idx := 0; idx < len(kvs); idx += 2 {
-			pipe.Set(ctx, kvs[idx], kvs[idx+1], options.TTL).Result()
+			if _, err := pipe.Set(ctx, kvs[idx], kvs[idx+1], options.TTL).Result(); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
-	if err != nil {
+
+	te := time.Since(ts)
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Dec()
+	r.opts.Meter.Summary(semconv.CacheRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.CacheRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	if err == redis.Nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "miss").Inc()
+		return store.ErrNotFound
+	} else if err == nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "hit").Inc()
+	} else if err != nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
 
 	for _, cmd := range cmds {
 		if err = cmd.Err(); err != nil {
+			if err == redis.Nil {
+				r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "miss").Inc()
+				return store.ErrNotFound
+			}
+			r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "failure").Inc()
 			return err
 		}
 	}
@@ -269,15 +392,17 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 }
 
 func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...store.WriteOption) error {
-	if r.opts.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
-		defer cancel()
+	options := store.NewWriteOptions(opts...)
+
+	timeout := r.opts.Timeout
+	if options.Timeout > 0 {
+		timeout = options.Timeout
 	}
 
-	options := store.NewWriteOptions(opts...)
-	if len(options.Namespace) == 0 {
-		options.Namespace = r.opts.Namespace
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 
 	var buf []byte
@@ -294,11 +419,24 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 		}
 	}
 
-	if options.Namespace != "" {
-		key = fmt.Sprintf("%s%s", options.Namespace, key)
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Inc()
+	ts := time.Now()
+	err := r.cli.Set(ctx, r.getKey(r.opts.Namespace, options.Namespace, key), buf, options.TTL).Err()
+	te := time.Since(ts)
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Dec()
+	r.opts.Meter.Summary(semconv.CacheRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.CacheRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	if err == redis.Nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "miss").Inc()
+		return store.ErrNotFound
+	} else if err == nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "hit").Inc()
+	} else if err != nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "failure").Inc()
+		return err
 	}
 
-	return r.cli.Set(ctx, key, buf, options.TTL).Err()
+	return err
 }
 
 func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, error) {
@@ -307,29 +445,53 @@ func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, e
 		options.Namespace = r.opts.Namespace
 	}
 
-	rkey := fmt.Sprintf("%s%s*", options.Namespace, options.Prefix)
+	rkey := r.getKey(options.Namespace, "", options.Prefix+"*")
 	if options.Suffix != "" {
 		rkey += options.Suffix
 	}
-	if r.opts.Timeout > 0 {
+
+	timeout := r.opts.Timeout
+	if options.Timeout > 0 {
+		timeout = options.Timeout
+	}
+
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.opts.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+
 	// TODO: add support for prefix/suffix/limit
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Inc()
+	ts := time.Now()
 	keys, err := r.cli.Keys(ctx, rkey).Result()
-	if err != nil {
+	te := time.Since(ts)
+	r.opts.Meter.Counter(semconv.CacheRequestInflight, "name", options.Name).Dec()
+	r.opts.Meter.Summary(semconv.CacheRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.CacheRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	if err == redis.Nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "miss").Inc()
+		return nil, store.ErrNotFound
+	} else if err == nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "hit").Inc()
+	} else if err != nil {
+		r.opts.Meter.Counter(semconv.CacheRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return nil, err
 	}
-	if options.Namespace == "" {
+
+	prefix := r.opts.Namespace
+	if options.Namespace != "" {
+		prefix = options.Namespace
+	}
+	if prefix == "" {
 		return keys, nil
 	}
 
-	nkeys := make([]string, 0, len(keys))
-	for _, key := range keys {
-		nkeys = append(nkeys, strings.TrimPrefix(key, options.Namespace))
+	for idx, key := range keys {
+		keys[idx] = strings.TrimPrefix(key, prefix)
 	}
-	return nkeys, nil
+
+	return keys, nil
 }
 
 func (r *Store) Options() store.Options {
@@ -390,36 +552,14 @@ func (r *Store) configure() error {
 	if redisOptions == nil && redisClusterOptions == nil && len(nodes) == 1 {
 		redisOptions, err = redis.ParseURL(nodes[0])
 		if err != nil {
-			// Backwards compatibility
-			redisOptions = &redis.Options{
-				Addr:            nodes[0],
-				Username:        "",
-				Password:        "", // no password set
-				DB:              0,  // use default DB
-				MaxRetries:      2,
-				MaxRetryBackoff: 256 * time.Millisecond,
-				DialTimeout:     1 * time.Second,
-				ReadTimeout:     1 * time.Second,
-				WriteTimeout:    1 * time.Second,
-				PoolTimeout:     1 * time.Second,
-				MinIdleConns:    10,
-				TLSConfig:       r.opts.TLSConfig,
-			}
+			redisOptions = DefaultOptions
+			redisOptions.Addr = r.opts.Addrs[0]
+			redisOptions.TLSConfig = r.opts.TLSConfig
 		}
 	} else if redisOptions == nil && redisClusterOptions == nil && len(nodes) > 1 {
-		redisClusterOptions = &redis.ClusterOptions{
-			Addrs:           nodes,
-			Username:        "",
-			Password:        "", // no password set
-			MaxRetries:      2,
-			MaxRetryBackoff: 256 * time.Millisecond,
-			DialTimeout:     1 * time.Second,
-			ReadTimeout:     1 * time.Second,
-			WriteTimeout:    1 * time.Second,
-			PoolTimeout:     1 * time.Second,
-			MinIdleConns:    10,
-			TLSConfig:       r.opts.TLSConfig,
-		}
+		redisClusterOptions = DefaultClusterOptions
+		redisClusterOptions.Addrs = r.opts.Addrs
+		redisClusterOptions.TLSConfig = r.opts.TLSConfig
 	}
 
 	if redisOptions != nil {
@@ -429,4 +569,20 @@ func (r *Store) configure() error {
 	}
 
 	return nil
+}
+
+func (r *Store) getKey(mainNamespace string, opNamespace string, key string) string {
+	b := r.pool.Get()
+	defer r.pool.Put(b)
+	b.Reset()
+
+	if opNamespace == "" {
+		opNamespace = mainNamespace
+	}
+	if opNamespace != "" {
+		b.WriteString(opNamespace)
+		b.WriteString(DefaultPathSeparator)
+	}
+	b.WriteString(key)
+	return b.String()
 }

@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/redis/go-redis/v9 v9.2.1
-	go.unistack.org/micro/v3 v3.10.28
+	go.unistack.org/micro/v3 v3.10.62
 )
 
 require (
