@@ -46,7 +46,7 @@ var (
 type Store struct {
 	opts store.Options
 	cli  redisClient
-	pool pool.Pool[strings.Builder]
+	pool pool.Pool[*strings.Builder]
 }
 
 type redisClient interface {
@@ -607,6 +607,7 @@ func (r *Store) configure() error {
 		r.cli = redis.NewClusterClient(redisClusterOptions)
 	}
 
+	r.pool = pool.NewPool(func() *strings.Builder { return &strings.Builder{} })
 	return nil
 }
 
