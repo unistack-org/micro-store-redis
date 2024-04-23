@@ -7,14 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"go.unistack.org/micro/v3/store"
 )
 
 func Test_rkv_configure(t *testing.T) {
 	type fields struct {
 		options store.Options
-		Client  *redis.Client
+		Client  *wrappedClient
 	}
 	type wantValues struct {
 		username string
