@@ -98,6 +98,15 @@ func (h *tracingHook) ProcessPipelineHook(hook redis.ProcessPipelineHook) redis.
 	}
 }
 
+func setSpanError(ctx context.Context, err error) {
+	if err == nil || err == redis.Nil {
+		return
+	}
+	if sp, ok := tracer.SpanFromContext(ctx); !ok && sp != nil {
+		sp.SetStatus(tracer.SpanStatusError, err.Error())
+	}
+}
+
 func recordError(span tracer.Span, err error) {
 	if err != nil && err != redis.Nil {
 		span.SetStatus(tracer.SpanStatusError, err.Error())

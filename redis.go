@@ -10,7 +10,6 @@ import (
 	redis "github.com/redis/go-redis/v9"
 	"go.unistack.org/micro/v3/semconv"
 	"go.unistack.org/micro/v3/store"
-	"go.unistack.org/micro/v3/tracer"
 	pool "go.unistack.org/micro/v3/util/xpool"
 )
 
@@ -56,10 +55,13 @@ type wrappedClient struct {
 }
 
 func (r *Store) Connect(ctx context.Context) error {
+	var err error
 	if r.cli.Client != nil {
-		return r.cli.Client.Ping(ctx).Err()
+		err = r.cli.Client.Ping(ctx).Err()
 	}
-	return r.cli.ClusterClient.Ping(ctx).Err()
+	err = r.cli.ClusterClient.Ping(ctx).Err()
+	setSpanError(ctx, err)
+	return err
 }
 
 func (r *Store) Init(opts ...store.Option) error {
@@ -103,8 +105,6 @@ func (r *Store) Disconnect(ctx context.Context) error {
 		close(r.done)
 		return err
 	}
-
-	return err
 }
 
 func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOption) error {
@@ -122,8 +122,6 @@ func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOpti
 	}
 
 	rkey := r.getKey(r.opts.Namespace, options.Namespace, key)
-	ctx, sp := r.opts.Tracer.Start(ctx, "cache exists "+rkey)
-	defer sp.Finish()
 
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
@@ -134,6 +132,7 @@ func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOpti
 	} else {
 		val, err = r.cli.ClusterClient.Exists(ctx, rkey).Result()
 	}
+	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
@@ -144,7 +143,6 @@ func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOpti
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
-		sp.SetStatus(tracer.SpanStatusError, err.Error())
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
@@ -167,8 +165,6 @@ func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...s
 	}
 
 	rkey := r.getKey(r.opts.Namespace, options.Namespace, key)
-	ctx, sp := r.opts.Tracer.Start(ctx, "cache read "+rkey)
-	defer sp.Finish()
 
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
@@ -179,6 +175,7 @@ func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...s
 	} else {
 		buf, err = r.cli.ClusterClient.Get(ctx, rkey).Bytes()
 	}
+	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
@@ -189,7 +186,6 @@ func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...s
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
-		sp.SetStatus(tracer.SpanStatusError, err.Error())
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
@@ -201,7 +197,7 @@ func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...s
 		*b = string(buf)
 	default:
 		if err = r.opts.Codec.Unmarshal(buf, val); err != nil {
-			sp.SetStatus(tracer.SpanStatusError, err.Error())
+			setSpanError(ctx, err)
 		}
 	}
 
@@ -228,9 +224,6 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 		}
 	}
 
-	ctx, sp := r.opts.Tracer.Start(ctx, fmt.Sprintf("cache mread %v", keys))
-	defer sp.Finish()
-
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
 	var rvals []interface{}
@@ -240,6 +233,7 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 	} else {
 		rvals, err = r.cli.ClusterClient.MGet(ctx, keys...).Result()
 	}
+	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
@@ -250,7 +244,6 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
-		sp.SetStatus(tracer.SpanStatusError, err.Error())
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
@@ -292,7 +285,7 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 
 		itm.Set(reflect.New(vt.Elem()))
 		if err = r.opts.Codec.Unmarshal(buf, itm.Interface()); err != nil {
-			sp.SetStatus(tracer.SpanStatusError, err.Error())
+			setSpanError(ctx, err)
 			return err
 		}
 	}
@@ -321,9 +314,6 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 		}
 	}
 
-	ctx, sp := r.opts.Tracer.Start(ctx, fmt.Sprintf("cache mdelete %v", keys))
-	defer sp.Finish()
-
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
 	var err error
@@ -332,6 +322,7 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 	} else {
 		err = r.cli.ClusterClient.Del(ctx, keys...).Err()
 	}
+	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
@@ -342,7 +333,6 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
-		sp.SetStatus(tracer.SpanStatusError, err.Error())
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
@@ -364,9 +354,6 @@ func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOpti
 		defer cancel()
 	}
 
-	ctx, sp := r.opts.Tracer.Start(ctx, fmt.Sprintf("cache delete %v", key))
-	defer sp.Finish()
-
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
 	var err error
@@ -375,6 +362,7 @@ func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOpti
 	} else {
 		err = r.cli.ClusterClient.Del(ctx, r.getKey(r.opts.Namespace, options.Namespace, key)).Err()
 	}
+	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
@@ -385,7 +373,6 @@ func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOpti
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
-		sp.SetStatus(tracer.SpanStatusError, err.Error())
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
@@ -407,9 +394,6 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 		defer cancel()
 	}
 
-	ctx, sp := r.opts.Tracer.Start(ctx, fmt.Sprintf("cache mwrite %v", keys))
-	defer sp.Finish()
-
 	kvs := make([]string, 0, len(keys)*2)
 
 	for idx, key := range keys {
@@ -423,7 +407,6 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 		default:
 			buf, err := r.opts.Codec.Marshal(vt)
 			if err != nil {
-				sp.SetStatus(tracer.SpanStatusError, err.Error())
 				return err
 			}
 			kvs = append(kvs, string(buf))
@@ -436,6 +419,7 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 	pipeliner := func(pipe redis.Pipeliner) error {
 		for idx := 0; idx < len(kvs); idx += 2 {
 			if _, err := pipe.Set(ctx, kvs[idx], kvs[idx+1], options.TTL).Result(); err != nil {
+				setSpanError(ctx, err)
 				return err
 			}
 		}
@@ -450,7 +434,7 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 	} else {
 		cmds, err = r.cli.ClusterClient.Pipelined(ctx, pipeliner)
 	}
-
+	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
@@ -461,7 +445,6 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
-		sp.SetStatus(tracer.SpanStatusError, err.Error())
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
@@ -472,7 +455,7 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 				r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 				return store.ErrNotFound
 			}
-			sp.SetStatus(tracer.SpanStatusError, err.Error())
+			setSpanError(ctx, err)
 			r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
 			return err
 		}
@@ -496,8 +479,6 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 	}
 
 	rkey := r.getKey(r.opts.Namespace, options.Namespace, key)
-	ctx, sp := r.opts.Tracer.Start(ctx, fmt.Sprintf("cache write %v", rkey))
-	defer sp.Finish()
 
 	var buf []byte
 	switch vt := val.(type) {
@@ -509,7 +490,6 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 		var err error
 		buf, err = r.opts.Codec.Marshal(val)
 		if err != nil {
-			sp.SetStatus(tracer.SpanStatusError, err.Error())
 			return err
 		}
 	}
@@ -522,6 +502,7 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 	} else {
 		err = r.cli.ClusterClient.Set(ctx, rkey, buf, options.TTL).Err()
 	}
+	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
@@ -532,7 +513,6 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
-		sp.SetStatus(tracer.SpanStatusError, err.Error())
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return err
 	}
@@ -562,9 +542,6 @@ func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, e
 		defer cancel()
 	}
 
-	ctx, sp := r.opts.Tracer.Start(ctx, fmt.Sprintf("cache list %v", rkey))
-	defer sp.Finish()
-
 	// TODO: add support for prefix/suffix/limit
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
@@ -583,6 +560,7 @@ func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, e
 			return nil
 		})
 	}
+	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
@@ -593,7 +571,6 @@ func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, e
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
 	} else if err != nil {
-		sp.SetStatus(tracer.SpanStatusError, err.Error())
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
 		return nil, err
 	}
