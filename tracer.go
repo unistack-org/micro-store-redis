@@ -16,23 +16,20 @@ func setTracing(rdb redis.UniversalClient, tr tracer.Tracer, opts ...tracer.Span
 	case *redis.Client:
 		opt := rdb.Options()
 		connString := formatDBConnString(opt.Network, opt.Addr)
-		opts = addServerAttributes(opts, opt.Addr)
-		rdb.AddHook(newTracingHook(connString, tr, opts...))
+		rdb.AddHook(newTracingHook(connString, tr))
 	case *redis.ClusterClient:
 		rdb.AddHook(newTracingHook("", tr, opts...))
 		rdb.OnNewNode(func(rdb *redis.Client) {
 			opt := rdb.Options()
-			opts = addServerAttributes(opts, opt.Addr)
 			connString := formatDBConnString(opt.Network, opt.Addr)
-			rdb.AddHook(newTracingHook(connString, tr, opts...))
+			rdb.AddHook(newTracingHook(connString, tr))
 		})
 	case *redis.Ring:
 		rdb.AddHook(newTracingHook("", tr, opts...))
 		rdb.OnNewNode(func(rdb *redis.Client) {
 			opt := rdb.Options()
-			opts = addServerAttributes(opts, opt.Addr)
 			connString := formatDBConnString(opt.Network, opt.Addr)
-			rdb.AddHook(newTracingHook(connString, tr, opts...))
+			rdb.AddHook(newTracingHook(connString, tr))
 		})
 	}
 }
@@ -58,15 +55,13 @@ func newTracingHook(connString string, tr tracer.Tracer, opts ...tracer.SpanOpti
 
 func (h *tracingHook) DialHook(hook redis.DialHook) redis.DialHook {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		ctx, span := h.tr.Start(ctx, "redis.dial", h.opts...)
+		sctx, span := h.tr.Start(ctx, "redis.dial", h.opts...)
 		defer span.Finish()
 
-		conn, err := hook(ctx, network, addr)
-		if err != nil {
-			recordError(span, err)
-			return nil, err
-		}
-		return conn, nil
+		conn, err := hook(sctx, network, addr)
+		recordError(span, err)
+
+		return conn, err
 	}
 }
 
@@ -74,41 +69,37 @@ func (h *tracingHook) ProcessHook(hook redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		cmdString := rediscmd.CmdString(cmd)
 
-		ctx, span := h.tr.Start(ctx, cmd.FullName(), append(h.opts, tracer.WithSpanLabels("db.statement", cmdString))...)
+		sctx, span := h.tr.Start(ctx, "redis.process", append(h.opts, tracer.WithSpanLabels("db.statement", cmdString))...)
 		defer span.Finish()
 
-		if err := hook(ctx, cmd); err != nil {
-			recordError(span, err)
-			return err
-		}
-		return nil
+		err := hook(sctx, cmd)
+		recordError(span, err)
+
+		return err
 	}
 }
 
-func (h *tracingHook) ProcessPipelineHook(
-	hook redis.ProcessPipelineHook,
-) redis.ProcessPipelineHook {
+func (h *tracingHook) ProcessPipelineHook(hook redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []redis.Cmder) error {
-		summary, cmdsString := rediscmd.CmdsString(cmds)
+		_, cmdsString := rediscmd.CmdsString(cmds)
 
 		opts := append(h.opts, tracer.WithSpanLabels(
 			"db.redis.num_cmd", strconv.Itoa(len(cmds)),
 			"db.statement", cmdsString,
 		))
 
-		ctx, span := h.tr.Start(ctx, "redis.pipeline "+summary, opts...)
+		sctx, span := h.tr.Start(ctx, "redis.process_pipeline", opts...)
 		defer span.Finish()
 
-		if err := hook(ctx, cmds); err != nil {
-			recordError(span, err)
-			return err
-		}
-		return nil
+		err := hook(sctx, cmds)
+		recordError(span, err)
+
+		return err
 	}
 }
 
 func recordError(span tracer.Span, err error) {
-	if err != redis.Nil {
+	if err != nil && err != redis.Nil {
 		span.SetStatus(tracer.SpanStatusError, err.Error())
 	}
 }
@@ -118,25 +109,4 @@ func formatDBConnString(network, addr string) string {
 		network = "redis"
 	}
 	return fmt.Sprintf("%s://%s", network, addr)
-}
-
-// Database span attributes semantic conventions recommended server address and port
-// https://opentelemetry.io/docs/specs/semconv/database/database-spans/#connection-level-attributes
-func addServerAttributes(opts []tracer.SpanOption, addr string) []tracer.SpanOption {
-	host, portString, err := net.SplitHostPort(addr)
-	if err != nil {
-		return opts
-	}
-
-	opts = append(opts, tracer.WithSpanLabels("server.address", host))
-
-	// Parse the port string to an integer
-	port, err := strconv.Atoi(portString)
-	if err != nil {
-		return opts
-	}
-
-	opts = append(opts, tracer.WithSpanLabels("server.port", port))
-
-	return opts
 }
