@@ -18,14 +18,12 @@ func setTracing(rdb redis.UniversalClient, tr tracer.Tracer, opts ...tracer.Span
 		connString := formatDBConnString(opt.Network, opt.Addr)
 		rdb.AddHook(newTracingHook(connString, tr))
 	case *redis.ClusterClient:
-		rdb.AddHook(newTracingHook("", tr, opts...))
 		rdb.OnNewNode(func(rdb *redis.Client) {
 			opt := rdb.Options()
 			connString := formatDBConnString(opt.Network, opt.Addr)
 			rdb.AddHook(newTracingHook(connString, tr))
 		})
 	case *redis.Ring:
-		rdb.AddHook(newTracingHook("", tr, opts...))
 		rdb.OnNewNode(func(rdb *redis.Client) {
 			opt := rdb.Options()
 			connString := formatDBConnString(opt.Network, opt.Addr)
