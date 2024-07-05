@@ -68,12 +68,20 @@ func (h *tracingHook) DialHook(hook redis.DialHook) redis.DialHook {
 func (h *tracingHook) ProcessHook(hook redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		cmdString := rediscmd.CmdString(cmd)
+		var err error
 
-		_, span := h.tr.Start(ctx, "redis.process", append(h.opts, tracer.WithSpanLabels("db.statement", cmdString))...)
-		defer span.Finish()
+		switch cmdString {
+		case "cluster slots":
+			break
+		default:
+			_, span := h.tr.Start(ctx, "redis.process", append(h.opts, tracer.WithSpanLabels("db.statement", cmdString))...)
+			defer func() {
+				recordError(span, err)
+				span.Finish()
+			}()
+		}
 
-		err := hook(ctx, cmd)
-		recordError(span, err)
+		err = hook(ctx, cmd)
 
 		return err
 	}
