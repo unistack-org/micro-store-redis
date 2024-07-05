@@ -55,10 +55,10 @@ func newTracingHook(connString string, tr tracer.Tracer, opts ...tracer.SpanOpti
 
 func (h *tracingHook) DialHook(hook redis.DialHook) redis.DialHook {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		sctx, span := h.tr.Start(ctx, "redis.dial", h.opts...)
+		_, span := h.tr.Start(ctx, "redis.dial", h.opts...)
 		defer span.Finish()
 
-		conn, err := hook(sctx, network, addr)
+		conn, err := hook(ctx, network, addr)
 		recordError(span, err)
 
 		return conn, err
@@ -69,10 +69,10 @@ func (h *tracingHook) ProcessHook(hook redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		cmdString := rediscmd.CmdString(cmd)
 
-		sctx, span := h.tr.Start(ctx, "redis.process", append(h.opts, tracer.WithSpanLabels("db.statement", cmdString))...)
+		_, span := h.tr.Start(ctx, "redis.process", append(h.opts, tracer.WithSpanLabels("db.statement", cmdString))...)
 		defer span.Finish()
 
-		err := hook(sctx, cmd)
+		err := hook(ctx, cmd)
 		recordError(span, err)
 
 		return err
@@ -88,10 +88,10 @@ func (h *tracingHook) ProcessPipelineHook(hook redis.ProcessPipelineHook) redis.
 			"db.statement", cmdsString,
 		))
 
-		sctx, span := h.tr.Start(ctx, "redis.process_pipeline", opts...)
+		_, span := h.tr.Start(ctx, "redis.process_pipeline", opts...)
 		defer span.Finish()
 
-		err := hook(sctx, cmds)
+		err := hook(ctx, cmds)
 		recordError(span, err)
 
 		return err
