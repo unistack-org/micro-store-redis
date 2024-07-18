@@ -6,7 +6,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/redis/go-redis/extra/rediscmd/v9"
+	rediscmd "github.com/redis/go-redis/extra/rediscmd/v9"
 	"github.com/redis/go-redis/v9"
 	"go.unistack.org/micro/v3/tracer"
 )
@@ -53,11 +53,12 @@ func newTracingHook(connString string, tr tracer.Tracer, opts ...tracer.SpanOpti
 
 func (h *tracingHook) DialHook(hook redis.DialHook) redis.DialHook {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		_, span := h.tr.Start(ctx, "redis.dial", h.opts...)
-		defer span.Finish()
-
+		/*
+			_, span := h.tr.Start(ctx, "redis.dial", h.opts...)
+			defer span.Finish()
+		*/
 		conn, err := hook(ctx, network, addr)
-		recordError(span, err)
+		// recordError(span, err)
 
 		return conn, err
 	}
