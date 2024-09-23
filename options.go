@@ -27,6 +27,9 @@ var (
 	DefaultMeterStatsInterval = 5 * time.Second
 	// DefaultMeterMetricPrefix holds default metric prefix
 	DefaultMeterMetricPrefix = "micro_store_"
+
+	labelHost = "redis_host"
+	labelName = "redis_name"
 )
 
 // Options struct holds wrapper options
@@ -36,6 +39,8 @@ type Options struct {
 	Tracer             tracer.Tracer
 	MeterMetricPrefix  string
 	MeterStatsInterval time.Duration
+	RedisHost          string
+	RedisName          string
 }
 
 // Option func signature
@@ -56,7 +61,9 @@ func NewOptions(opts ...Option) Options {
 	}
 
 	options.Meter = options.Meter.Clone(
-		meter.MetricPrefix(options.MeterMetricPrefix),
+		meter.Labels(
+			labelHost, options.RedisHost,
+			labelName, options.RedisName),
 	)
 
 	options.Logger = options.Logger.Clone(logger.WithCallerSkipCount(1))
