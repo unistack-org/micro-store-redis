@@ -218,9 +218,11 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 		defer cancel()
 	}
 
+	var rkeys []string
 	if r.opts.Namespace != "" || options.Namespace != "" {
+		rkeys = make([]string, len(keys))
 		for idx, key := range keys {
-			keys[idx] = r.getKey(r.opts.Namespace, options.Namespace, key)
+			rkeys[idx] = r.getKey(r.opts.Namespace, options.Namespace, key)
 		}
 	}
 
@@ -228,10 +230,18 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 	ts := time.Now()
 	var rvals []interface{}
 	var err error
-	if r.cli.Client != nil {
-		rvals, err = r.cli.Client.MGet(ctx, keys...).Result()
+	if r.opts.Namespace != "" || options.Namespace != "" {
+		if r.cli.Client != nil {
+			rvals, err = r.cli.Client.MGet(ctx, rkeys...).Result()
+		} else {
+			rvals, err = r.cli.ClusterClient.MGet(ctx, rkeys...).Result()
+		}
 	} else {
-		rvals, err = r.cli.ClusterClient.MGet(ctx, keys...).Result()
+		if r.cli.Client != nil {
+			rvals, err = r.cli.Client.MGet(ctx, keys...).Result()
+		} else {
+			rvals, err = r.cli.ClusterClient.MGet(ctx, keys...).Result()
+		}
 	}
 	setSpanError(ctx, err)
 	te := time.Since(ts)
@@ -308,19 +318,29 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 		defer cancel()
 	}
 
+	var rkeys []string
 	if r.opts.Namespace != "" || options.Namespace != "" {
+		rkeys = make([]string, len(keys))
 		for idx, key := range keys {
-			keys[idx] = r.getKey(r.opts.Namespace, options.Namespace, key)
+			rkeys[idx] = r.getKey(r.opts.Namespace, options.Namespace, key)
 		}
 	}
 
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
 	var err error
-	if r.cli.Client != nil {
-		err = r.cli.Client.Del(ctx, keys...).Err()
+	if r.opts.Namespace != "" || options.Namespace != "" {
+		if r.cli.Client != nil {
+			err = r.cli.Client.Del(ctx, rkeys...).Err()
+		} else {
+			err = r.cli.ClusterClient.Del(ctx, rkeys...).Err()
+		}
 	} else {
-		err = r.cli.ClusterClient.Del(ctx, keys...).Err()
+		if r.cli.Client != nil {
+			err = r.cli.Client.Del(ctx, keys...).Err()
+		} else {
+			err = r.cli.ClusterClient.Del(ctx, keys...).Err()
+		}
 	}
 	setSpanError(ctx, err)
 	te := time.Since(ts)
