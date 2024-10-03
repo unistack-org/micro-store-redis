@@ -5,14 +5,8 @@ import (
 	"go.unistack.org/micro/v4/options"
 )
 
-type configKey struct{}
+type universalConfigKey struct{}
 
-func Config(c *redis.Options) options.Option {
-	return options.ContextOption(configKey{}, c)
-}
-
-type clusterConfigKey struct{}
-
-func ClusterConfig(c *redis.ClusterOptions) options.Option {
-	return options.ContextOption(clusterConfigKey{}, c)
+func UniversalConfig(c *redis.UniversalOptions) options.Option {
+	return options.ContextOption(universalConfigKey{}, c)
 }

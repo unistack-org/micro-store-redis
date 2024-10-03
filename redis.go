@@ -14,21 +14,7 @@ import (
 
 type Store struct {
 	opts store.Options
-	cli  redisClient
-}
-
-type redisClient interface {
-	Get(ctx context.Context, key string) *redis.StringCmd
-	Del(ctx context.Context, keys ...string) *redis.IntCmd
-	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
-	Keys(ctx context.Context, pattern string) *redis.StringSliceCmd
-	MGet(ctx context.Context, keys ...string) *redis.SliceCmd
-	MSet(ctx context.Context, kv ...interface{}) *redis.StatusCmd
-	Exists(ctx context.Context, keys ...string) *redis.IntCmd
-	Ping(ctx context.Context) *redis.StatusCmd
-	Pipeline() redis.Pipeliner
-	Pipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error)
-	Close() error
+	cli  redis.UniversalClient
 }
 
 func (r *Store) Connect(ctx context.Context) error {
@@ -43,8 +29,8 @@ func (r *Store) Init(opts ...options.Option) error {
 	return r.configure()
 }
 
-func (r *Store) Redis() *redis.Client {
-	return r.cli.(*redis.Client)
+func (r *Store) Redis() redis.UniversalClient {
+	return r.cli
 }
 
 func (r *Store) Disconnect(ctx context.Context) error {
@@ -350,68 +336,30 @@ func NewStore(opts ...options.Option) *Store {
 }
 
 func (r *Store) configure() error {
-	var redisOptions *redis.Options
-	var redisClusterOptions *redis.ClusterOptions
-	var err error
-
-	nodes := r.opts.Address
-
-	if len(nodes) == 0 {
-		nodes = []string{"redis://127.0.0.1:6379"}
-	}
+	var redisUniversalOptions *redis.UniversalOptions
 
 	if r.cli != nil && r.opts.Context == nil {
 		return nil
 	}
 
 	if r.opts.Context != nil {
-		if c, ok := r.opts.Context.Value(configKey{}).(*redis.Options); ok {
-			redisOptions = c
+		if c, ok := r.opts.Context.Value(universalConfigKey{}).(*redis.UniversalOptions); ok {
+			redisUniversalOptions = c
 			if r.opts.TLSConfig != nil {
-				redisOptions.TLSConfig = r.opts.TLSConfig
-			}
-		}
-
-		if c, ok := r.opts.Context.Value(clusterConfigKey{}).(*redis.ClusterOptions); ok {
-			redisClusterOptions = c
-			if r.opts.TLSConfig != nil {
-				redisClusterOptions.TLSConfig = r.opts.TLSConfig
+				redisUniversalOptions.TLSConfig = r.opts.TLSConfig
 			}
 		}
 	}
 
-	if redisOptions != nil && redisClusterOptions != nil {
-		return fmt.Errorf("must specify only one option Config or ClusterConfig")
-	}
-
-	if redisOptions == nil && redisClusterOptions == nil && r.cli != nil {
+	if redisUniversalOptions == nil && r.cli != nil {
 		return nil
 	}
 
-	if redisOptions == nil && redisClusterOptions == nil && len(nodes) == 1 {
-		redisOptions, err = redis.ParseURL(nodes[0])
-		if err != nil {
-			// Backwards compatibility
-			redisOptions = &redis.Options{
-				Addr:            nodes[0],
-				Username:        "",
-				Password:        "", // no password set
-				DB:              0,  // use default DB
-				MaxRetries:      2,
-				MaxRetryBackoff: 256 * time.Millisecond,
-				DialTimeout:     1 * time.Second,
-				ReadTimeout:     1 * time.Second,
-				WriteTimeout:    1 * time.Second,
-				PoolTimeout:     1 * time.Second,
-				MinIdleConns:    10,
-				TLSConfig:       r.opts.TLSConfig,
-			}
-		}
-	} else if redisOptions == nil && redisClusterOptions == nil && len(nodes) > 1 {
-		redisClusterOptions = &redis.ClusterOptions{
-			Addrs:           nodes,
+	if redisUniversalOptions == nil {
+		redisUniversalOptions = &redis.UniversalOptions{
 			Username:        "",
 			Password:        "", // no password set
+			DB:              0,  // use default DB
 			MaxRetries:      2,
 			MaxRetryBackoff: 256 * time.Millisecond,
 			DialTimeout:     1 * time.Second,
@@ -423,11 +371,13 @@ func (r *Store) configure() error {
 		}
 	}
 
-	if redisOptions != nil {
-		r.cli = redis.NewClient(redisOptions)
-	} else if redisClusterOptions != nil {
-		r.cli = redis.NewClusterClient(redisClusterOptions)
+	if len(r.opts.Address) > 0 {
+		redisUniversalOptions.Addrs = r.opts.Address
+	} else if len(redisUniversalOptions.Addrs) == 0 {
+		redisUniversalOptions.Addrs = []string{"redis://127.0.0.1:6379"}
 	}
+
+	r.cli = redis.NewUniversalClient(redisUniversalOptions)
 
 	return nil
 }
