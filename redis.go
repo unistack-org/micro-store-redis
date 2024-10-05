@@ -2,12 +2,11 @@ package redis
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"strings"
 	"time"
 
-	redis "github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
 	"go.unistack.org/micro/v3/semconv"
 	"go.unistack.org/micro/v3/store"
 	pool "go.unistack.org/micro/v3/util/xpool"
@@ -16,7 +15,7 @@ import (
 var (
 	DefaultPathSeparator = "/"
 
-	DefaultClusterOptions = &redis.ClusterOptions{
+	DefaultUniversalOptions = &goredis.UniversalOptions{
 		Username:        "",
 		Password:        "", // no password set
 		MaxRetries:      2,
@@ -28,7 +27,19 @@ var (
 		MinIdleConns:    10,
 	}
 
-	DefaultOptions = &redis.Options{
+	DefaultClusterOptions = &goredis.ClusterOptions{
+		Username:        "",
+		Password:        "", // no password set
+		MaxRetries:      2,
+		MaxRetryBackoff: 256 * time.Millisecond,
+		DialTimeout:     1 * time.Second,
+		ReadTimeout:     1 * time.Second,
+		WriteTimeout:    1 * time.Second,
+		PoolTimeout:     1 * time.Second,
+		MinIdleConns:    10,
+	}
+
+	DefaultOptions = &goredis.Options{
 		Username:        "",
 		Password:        "", // no password set
 		DB:              0,  // use default DB
@@ -44,22 +55,16 @@ var (
 
 type Store struct {
 	opts store.Options
-	cli  *wrappedClient
+	cli  goredis.UniversalClient
 	done chan struct{}
-	pool pool.Pool[*strings.Builder]
-}
-
-type wrappedClient struct {
-	*redis.Client
-	*redis.ClusterClient
+	pool *pool.StringsPool
 }
 
 func (r *Store) Connect(ctx context.Context) error {
-	var err error
-	if r.cli.Client != nil {
-		err = r.cli.Client.Ping(ctx).Err()
+	if r.cli == nil {
+		return store.ErrNotConnected
 	}
-	err = r.cli.ClusterClient.Ping(ctx).Err()
+	err := r.cli.Ping(ctx).Err()
 	setSpanError(ctx, err)
 	return err
 }
@@ -77,16 +82,20 @@ func (r *Store) Init(opts ...store.Option) error {
 	return nil
 }
 
-func (r *Store) Client() *redis.Client {
-	if r.cli.Client != nil {
-		return r.cli.Client
+func (r *Store) Client() *goredis.Client {
+	if c, ok := r.cli.(*goredis.Client); ok {
+		return c
 	}
 	return nil
 }
 
-func (r *Store) ClusterClient() *redis.ClusterClient {
-	if r.cli.ClusterClient != nil {
-		return r.cli.ClusterClient
+func (r *Store) UniversalClient() goredis.UniversalClient {
+	return r.cli
+}
+
+func (r *Store) ClusterClient() *goredis.ClusterClient {
+	if c, ok := r.cli.(*goredis.ClusterClient); ok {
+		return c
 	}
 	return nil
 }
@@ -97,10 +106,8 @@ func (r *Store) Disconnect(ctx context.Context) error {
 	case <-r.done:
 		return err
 	default:
-		if r.cli.Client != nil {
-			err = r.cli.Client.Close()
-		} else if r.cli.ClusterClient != nil {
-			err = r.cli.ClusterClient.Close()
+		if r.cli != nil {
+			err = r.cli.Close()
 		}
 		close(r.done)
 		return err
@@ -108,6 +115,8 @@ func (r *Store) Disconnect(ctx context.Context) error {
 }
 
 func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOption) error {
+	b := r.pool.Get()
+	defer r.pool.Put(b)
 	options := store.NewExistsOptions(opts...)
 
 	timeout := r.opts.Timeout
@@ -121,23 +130,17 @@ func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOpti
 		defer cancel()
 	}
 
-	rkey := r.getKey(r.opts.Namespace, options.Namespace, key)
+	rkey := r.getKey(b, r.opts.Namespace, options.Namespace, key)
 
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
-	var err error
-	var val int64
-	if r.cli.Client != nil {
-		val, err = r.cli.Client.Exists(ctx, rkey).Result()
-	} else {
-		val, err = r.cli.ClusterClient.Exists(ctx, rkey).Result()
-	}
+	val, err := r.cli.Exists(ctx, rkey).Result()
 	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
 	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == redis.Nil || (err == nil && val == 0) {
+	if err == goredis.Nil || (err == nil && val == 0) {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return store.ErrNotFound
 	} else if err == nil {
@@ -151,6 +154,9 @@ func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOpti
 }
 
 func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...store.ReadOption) error {
+	b := r.pool.Get()
+	defer r.pool.Put(b)
+
 	options := store.NewReadOptions(opts...)
 
 	timeout := r.opts.Timeout
@@ -164,23 +170,17 @@ func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...s
 		defer cancel()
 	}
 
-	rkey := r.getKey(r.opts.Namespace, options.Namespace, key)
+	rkey := r.getKey(b, r.opts.Namespace, options.Namespace, key)
 
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
-	var buf []byte
-	var err error
-	if r.cli.Client != nil {
-		buf, err = r.cli.Client.Get(ctx, rkey).Bytes()
-	} else {
-		buf, err = r.cli.ClusterClient.Get(ctx, rkey).Bytes()
-	}
+	buf, err := r.cli.Get(ctx, rkey).Bytes()
 	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
 	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == redis.Nil || (err == nil && buf == nil) {
+	if err == goredis.Nil || (err == nil && buf == nil) {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return store.ErrNotFound
 	} else if err == nil {
@@ -219,10 +219,14 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 	}
 
 	var rkeys []string
+	var pools []*strings.Builder
 	if r.opts.Namespace != "" || options.Namespace != "" {
 		rkeys = make([]string, len(keys))
+		pools = make([]*strings.Builder, len(keys))
 		for idx, key := range keys {
-			rkeys[idx] = r.getKey(r.opts.Namespace, options.Namespace, key)
+			b := r.pool.Get()
+			pools[idx] = b
+			rkeys[idx] = r.getKey(b, r.opts.Namespace, options.Namespace, key)
 		}
 	}
 
@@ -231,24 +235,19 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 	var rvals []interface{}
 	var err error
 	if r.opts.Namespace != "" || options.Namespace != "" {
-		if r.cli.Client != nil {
-			rvals, err = r.cli.Client.MGet(ctx, rkeys...).Result()
-		} else {
-			rvals, err = r.cli.ClusterClient.MGet(ctx, rkeys...).Result()
+		rvals, err = r.cli.MGet(ctx, rkeys...).Result()
+		for idx := range pools {
+			r.pool.Put(pools[idx])
 		}
 	} else {
-		if r.cli.Client != nil {
-			rvals, err = r.cli.Client.MGet(ctx, keys...).Result()
-		} else {
-			rvals, err = r.cli.ClusterClient.MGet(ctx, keys...).Result()
-		}
+		rvals, err = r.cli.MGet(ctx, keys...).Result()
 	}
 	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
 	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == redis.Nil || (len(rvals) == 0) {
+	if err == goredis.Nil || (len(rvals) == 0) {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return store.ErrNotFound
 	} else if err == nil {
@@ -319,10 +318,14 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 	}
 
 	var rkeys []string
+	var pools []*strings.Builder
 	if r.opts.Namespace != "" || options.Namespace != "" {
 		rkeys = make([]string, len(keys))
+		pools = make([]*strings.Builder, len(keys))
 		for idx, key := range keys {
-			rkeys[idx] = r.getKey(r.opts.Namespace, options.Namespace, key)
+			b := r.pool.Get()
+			pools[idx] = b
+			rkeys[idx] = r.getKey(b, r.opts.Namespace, options.Namespace, key)
 		}
 	}
 
@@ -330,24 +333,19 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 	ts := time.Now()
 	var err error
 	if r.opts.Namespace != "" || options.Namespace != "" {
-		if r.cli.Client != nil {
-			err = r.cli.Client.Del(ctx, rkeys...).Err()
-		} else {
-			err = r.cli.ClusterClient.Del(ctx, rkeys...).Err()
+		err = r.cli.Del(ctx, rkeys...).Err()
+		for idx := range pools {
+			r.pool.Put(pools[idx])
 		}
 	} else {
-		if r.cli.Client != nil {
-			err = r.cli.Client.Del(ctx, keys...).Err()
-		} else {
-			err = r.cli.ClusterClient.Del(ctx, keys...).Err()
-		}
+		err = r.cli.Del(ctx, keys...).Err()
 	}
 	setSpanError(ctx, err)
 	te := time.Since(ts)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
 	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == redis.Nil {
+	if err == goredis.Nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return store.ErrNotFound
 	} else if err == nil {
@@ -361,6 +359,9 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 }
 
 func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOption) error {
+	b := r.pool.Get()
+	defer r.pool.Put(b)
+
 	options := store.NewDeleteOptions(opts...)
 
 	timeout := r.opts.Timeout
@@ -376,18 +377,13 @@ func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOpti
 
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
-	var err error
-	if r.cli.Client != nil {
-		err = r.cli.Client.Del(ctx, r.getKey(r.opts.Namespace, options.Namespace, key)).Err()
-	} else {
-		err = r.cli.ClusterClient.Del(ctx, r.getKey(r.opts.Namespace, options.Namespace, key)).Err()
-	}
-	setSpanError(ctx, err)
+	err := r.cli.Del(ctx, r.getKey(b, r.opts.Namespace, options.Namespace, key)).Err()
 	te := time.Since(ts)
+	setSpanError(ctx, err)
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
 	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == redis.Nil {
+	if err == goredis.Nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return store.ErrNotFound
 	} else if err == nil {
@@ -415,9 +411,11 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 	}
 
 	kvs := make([]string, 0, len(keys)*2)
-
+	pools := make([]*strings.Builder, len(keys))
 	for idx, key := range keys {
-		kvs = append(kvs, r.getKey(r.opts.Namespace, options.Namespace, key))
+		b := r.pool.Get()
+		pools[idx] = b
+		kvs = append(kvs, r.getKey(b, r.opts.Namespace, options.Namespace, key))
 
 		switch vt := vals[idx].(type) {
 		case string:
@@ -434,9 +432,8 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 	}
 
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
-	ts := time.Now()
 
-	pipeliner := func(pipe redis.Pipeliner) error {
+	pipeliner := func(pipe goredis.Pipeliner) error {
 		for idx := 0; idx < len(kvs); idx += 2 {
 			if _, err := pipe.Set(ctx, kvs[idx], kvs[idx+1], options.TTL).Result(); err != nil {
 				setSpanError(ctx, err)
@@ -446,20 +443,18 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 		return nil
 	}
 
-	var err error
-	var cmds []redis.Cmder
-
-	if r.cli.Client != nil {
-		cmds, err = r.cli.Client.Pipelined(ctx, pipeliner)
-	} else {
-		cmds, err = r.cli.ClusterClient.Pipelined(ctx, pipeliner)
+	ts := time.Now()
+	cmds, err := r.cli.Pipelined(ctx, pipeliner)
+	for idx := range pools {
+		r.pool.Put(pools[idx])
 	}
-	setSpanError(ctx, err)
 	te := time.Since(ts)
+	setSpanError(ctx, err)
+
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
 	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == redis.Nil {
+	if err == goredis.Nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return store.ErrNotFound
 	} else if err == nil {
@@ -471,7 +466,7 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 
 	for _, cmd := range cmds {
 		if err = cmd.Err(); err != nil {
-			if err == redis.Nil {
+			if err == goredis.Nil {
 				r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 				return store.ErrNotFound
 			}
@@ -485,6 +480,9 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 }
 
 func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...store.WriteOption) error {
+	b := r.pool.Get()
+	defer r.pool.Put(b)
+
 	options := store.NewWriteOptions(opts...)
 
 	timeout := r.opts.Timeout
@@ -498,7 +496,7 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 		defer cancel()
 	}
 
-	rkey := r.getKey(r.opts.Namespace, options.Namespace, key)
+	rkey := r.getKey(b, r.opts.Namespace, options.Namespace, key)
 
 	var buf []byte
 	switch vt := val.(type) {
@@ -516,18 +514,14 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
 	ts := time.Now()
-	var err error
-	if r.cli.Client != nil {
-		err = r.cli.Client.Set(ctx, rkey, buf, options.TTL).Err()
-	} else {
-		err = r.cli.ClusterClient.Set(ctx, rkey, buf, options.TTL).Err()
-	}
-	setSpanError(ctx, err)
+	err := r.cli.Set(ctx, rkey, buf, options.TTL).Err()
 	te := time.Since(ts)
+	setSpanError(ctx, err)
+
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
 	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == redis.Nil {
+	if err == goredis.Nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return store.ErrNotFound
 	} else if err == nil {
@@ -541,12 +535,15 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 }
 
 func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, error) {
+	b := r.pool.Get()
+	defer r.pool.Put(b)
+
 	options := store.NewListOptions(opts...)
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
 	}
 
-	rkey := r.getKey(options.Namespace, "", options.Prefix+"*")
+	rkey := r.getKey(b, options.Namespace, "", options.Prefix+"*")
 	if options.Suffix != "" {
 		rkey += options.Suffix
 	}
@@ -568,10 +565,8 @@ func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, e
 	var keys []string
 	var err error
 
-	if r.cli.Client != nil {
-		keys, err = r.cli.Client.Keys(ctx, rkey).Result()
-	} else {
-		err = r.cli.ClusterClient.ForEachMaster(ctx, func(nctx context.Context, cli *redis.Client) error {
+	if c, ok := r.cli.(*goredis.ClusterClient); ok {
+		err = c.ForEachMaster(ctx, func(nctx context.Context, cli *goredis.Client) error {
 			nkeys, nerr := cli.Keys(nctx, rkey).Result()
 			if nerr != nil {
 				return nerr
@@ -579,13 +574,16 @@ func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, e
 			keys = append(keys, nkeys...)
 			return nil
 		})
+	} else {
+		keys, err = r.cli.Keys(ctx, rkey).Result()
 	}
-	setSpanError(ctx, err)
 	te := time.Since(ts)
+	setSpanError(ctx, err)
+
 	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
 	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
 	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == redis.Nil {
+	if err == goredis.Nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
 		return nil, store.ErrNotFound
 	} else if err == nil {
@@ -627,79 +625,106 @@ func NewStore(opts ...store.Option) *Store {
 }
 
 func (r *Store) configure() error {
-	var redisOptions *redis.Options
-	var redisClusterOptions *redis.ClusterOptions
-	var err error
-
-	nodes := r.opts.Addrs
-
-	if len(nodes) == 0 {
-		nodes = []string{"redis://127.0.0.1:6379"}
-	}
+	var universalOptions *goredis.UniversalOptions
 
 	if r.cli != nil && r.opts.Context == nil {
 		return nil
 	}
 
 	if r.opts.Context != nil {
-		if c, ok := r.opts.Context.Value(configKey{}).(*redis.Options); ok {
-			redisOptions = c
+		if o, ok := r.opts.Context.Value(configKey{}).(*goredis.Options); ok {
+			universalOptions.Addrs = []string{o.Addr}
+			universalOptions.Dialer = o.Dialer
+			universalOptions.OnConnect = o.OnConnect
+			universalOptions.Username = o.Username
+			universalOptions.Password = o.Password
+
+			universalOptions.MaxRetries = o.MaxRetries
+			universalOptions.MinRetryBackoff = o.MinRetryBackoff
+			universalOptions.MaxRetryBackoff = o.MaxRetryBackoff
+
+			universalOptions.DialTimeout = o.DialTimeout
+			universalOptions.ReadTimeout = o.ReadTimeout
+			universalOptions.WriteTimeout = o.WriteTimeout
+			universalOptions.ContextTimeoutEnabled = o.ContextTimeoutEnabled
+
+			universalOptions.PoolFIFO = o.PoolFIFO
+
+			universalOptions.PoolSize = o.PoolSize
+			universalOptions.PoolTimeout = o.PoolTimeout
+			universalOptions.MinIdleConns = o.MinIdleConns
+			universalOptions.MaxIdleConns = o.MaxIdleConns
+			universalOptions.ConnMaxIdleTime = o.ConnMaxIdleTime
+			universalOptions.ConnMaxLifetime = o.ConnMaxLifetime
+
 			if r.opts.TLSConfig != nil {
-				redisOptions.TLSConfig = r.opts.TLSConfig
+				universalOptions.TLSConfig = r.opts.TLSConfig
 			}
 		}
 
-		if c, ok := r.opts.Context.Value(clusterConfigKey{}).(*redis.ClusterOptions); ok {
-			redisClusterOptions = c
+		if o, ok := r.opts.Context.Value(clusterConfigKey{}).(*goredis.ClusterOptions); ok {
+			universalOptions.Addrs = o.Addrs
+			universalOptions.Dialer = o.Dialer
+			universalOptions.OnConnect = o.OnConnect
+			universalOptions.Username = o.Username
+			universalOptions.Password = o.Password
+
+			universalOptions.MaxRedirects = o.MaxRedirects
+			universalOptions.ReadOnly = o.ReadOnly
+			universalOptions.RouteByLatency = o.RouteByLatency
+			universalOptions.RouteRandomly = o.RouteRandomly
+
+			universalOptions.MaxRetries = o.MaxRetries
+			universalOptions.MinRetryBackoff = o.MinRetryBackoff
+			universalOptions.MaxRetryBackoff = o.MaxRetryBackoff
+
+			universalOptions.DialTimeout = o.DialTimeout
+			universalOptions.ReadTimeout = o.ReadTimeout
+			universalOptions.WriteTimeout = o.WriteTimeout
+			universalOptions.ContextTimeoutEnabled = o.ContextTimeoutEnabled
+
+			universalOptions.PoolFIFO = o.PoolFIFO
+
+			universalOptions.PoolSize = o.PoolSize
+			universalOptions.PoolTimeout = o.PoolTimeout
+			universalOptions.MinIdleConns = o.MinIdleConns
+			universalOptions.MaxIdleConns = o.MaxIdleConns
+			universalOptions.ConnMaxIdleTime = o.ConnMaxIdleTime
+			universalOptions.ConnMaxLifetime = o.ConnMaxLifetime
 			if r.opts.TLSConfig != nil {
-				redisClusterOptions.TLSConfig = r.opts.TLSConfig
+				universalOptions.TLSConfig = r.opts.TLSConfig
+			}
+		}
+
+		if o, ok := r.opts.Context.Value(universalConfigKey{}).(*goredis.UniversalOptions); ok {
+			universalOptions = o
+			if r.opts.TLSConfig != nil {
+				universalOptions.TLSConfig = r.opts.TLSConfig
 			}
 		}
 	}
 
-	if redisOptions != nil && redisClusterOptions != nil {
-		return fmt.Errorf("must specify only one option Config or ClusterConfig")
+	if universalOptions == nil {
+		universalOptions = DefaultUniversalOptions
 	}
 
-	if redisOptions == nil && redisClusterOptions == nil && r.cli != nil {
-		return nil
+	if len(r.opts.Addrs) > 0 {
+		universalOptions.Addrs = r.opts.Addrs
+	} else {
+		universalOptions.Addrs = []string{"redis://127.0.0.1:6379"}
 	}
 
-	if redisOptions == nil && redisClusterOptions == nil && len(nodes) == 1 {
-		redisOptions, err = redis.ParseURL(nodes[0])
-		if err != nil {
-			redisOptions = DefaultOptions
-			redisOptions.Addr = r.opts.Addrs[0]
-			redisOptions.TLSConfig = r.opts.TLSConfig
-		}
-	} else if redisOptions == nil && redisClusterOptions == nil && len(nodes) > 1 {
-		redisClusterOptions = DefaultClusterOptions
-		redisClusterOptions.Addrs = r.opts.Addrs
-		redisClusterOptions.TLSConfig = r.opts.TLSConfig
-	}
+	r.cli = goredis.NewUniversalClient(universalOptions)
+	setTracing(r.cli, r.opts.Tracer)
 
-	if redisOptions != nil {
-		c := redis.NewClient(redisOptions)
-		setTracing(c, r.opts.Tracer)
-		r.cli = &wrappedClient{Client: c}
-	} else if redisClusterOptions != nil {
-		c := redis.NewClusterClient(redisClusterOptions)
-		setTracing(c, r.opts.Tracer)
-		r.cli = &wrappedClient{ClusterClient: c}
-	}
-
-	r.pool = pool.NewPool(func() *strings.Builder { return &strings.Builder{} })
+	r.pool = pool.NewStringsPool(50)
 
 	r.statsMeter()
 
 	return nil
 }
 
-func (r *Store) getKey(mainNamespace string, opNamespace string, key string) string {
-	b := r.pool.Get()
-	defer r.pool.Put(b)
-	b.Reset()
-
+func (r *Store) getKey(b *strings.Builder, mainNamespace string, opNamespace string, key string) string {
 	if opNamespace == "" {
 		opNamespace = mainNamespace
 	}

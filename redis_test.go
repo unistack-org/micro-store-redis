@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"go.unistack.org/micro/v3/store"
 	"go.unistack.org/micro/v3/tracer"
 )
@@ -41,7 +42,7 @@ func TestKeepTTL(t *testing.T) {
 func Test_rkv_configure(t *testing.T) {
 	type fields struct {
 		options store.Options
-		Client  *wrappedClient
+		Client  goredis.UniversalClient
 	}
 	type wantValues struct {
 		username string

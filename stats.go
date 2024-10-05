@@ -3,7 +3,8 @@ package redis
 import (
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
+	"go.unistack.org/micro/v3/meter"
 )
 
 var (
@@ -13,29 +14,23 @@ var (
 	PoolConnTotalCurrent = "pool_conn_total_current"
 	PoolConnIdleCurrent  = "pool_conn_idle_current"
 	PoolConnStaleTotal   = "pool_conn_stale_total"
-
-	meterRequestTotal               = "request_total"
-	meterRequestLatencyMicroseconds = "latency_microseconds"
-	meterRequestDurationSeconds     = "request_duration_seconds"
 )
 
 type Statser interface {
-	PoolStats() *redis.PoolStats
+	PoolStats() *goredis.PoolStats
 }
 
 func (r *Store) statsMeter() {
 	var st Statser
 
-	if r.cli.Client != nil {
-		st = r.cli.Client
-	} else if r.cli.ClusterClient != nil {
-		st = r.cli.ClusterClient
+	if r.cli != nil {
+		st = r.cli
 	} else {
 		return
 	}
 
 	go func() {
-		ticker := time.NewTicker(DefaultMeterStatsInterval)
+		ticker := time.NewTicker(meter.DefaultMeterStatsInterval)
 		defer ticker.Stop()
 
 		for {
