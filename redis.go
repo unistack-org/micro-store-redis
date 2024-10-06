@@ -711,7 +711,7 @@ func (r *Store) configure() error {
 	if len(r.opts.Addrs) > 0 {
 		universalOptions.Addrs = r.opts.Addrs
 	} else {
-		universalOptions.Addrs = []string{"redis://127.0.0.1:6379"}
+		universalOptions.Addrs = []string{"127.0.0.1:6379"}
 	}
 
 	r.cli = goredis.NewUniversalClient(universalOptions)
