@@ -625,11 +625,11 @@ func NewStore(opts ...store.Option) *Store {
 }
 
 func (r *Store) configure() error {
-	universalOptions := &goredis.UniversalOptions{}
-
 	if r.cli != nil && r.opts.Context == nil {
 		return nil
 	}
+
+	universalOptions := DefaultUniversalOptions
 
 	if r.opts.Context != nil {
 		if o, ok := r.opts.Context.Value(configKey{}).(*goredis.Options); ok {
@@ -702,10 +702,6 @@ func (r *Store) configure() error {
 				universalOptions.TLSConfig = r.opts.TLSConfig
 			}
 		}
-	}
-
-	if universalOptions == nil {
-		universalOptions = DefaultUniversalOptions
 	}
 
 	if len(r.opts.Addrs) > 0 {
