@@ -625,7 +625,7 @@ func NewStore(opts ...store.Option) *Store {
 }
 
 func (r *Store) configure() error {
-	var universalOptions *goredis.UniversalOptions
+	universalOptions := &goredis.UniversalOptions{}
 
 	if r.cli != nil && r.opts.Context == nil {
 		return nil
