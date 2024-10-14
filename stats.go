@@ -33,20 +33,17 @@ func (r *Store) statsMeter() {
 		ticker := time.NewTicker(meter.DefaultMeterStatsInterval)
 		defer ticker.Stop()
 
-		for {
-			select {
-			case <-ticker.C:
-				if st == nil {
-					return
-				}
-				stats := st.PoolStats()
-				r.opts.Meter.Counter(PoolHitsTotal).Set(uint64(stats.Hits))
-				r.opts.Meter.Counter(PoolMissesTotal).Set(uint64(stats.Misses))
-				r.opts.Meter.Counter(PoolTimeoutTotal).Set(uint64(stats.Timeouts))
-				r.opts.Meter.Counter(PoolConnTotalCurrent).Set(uint64(stats.TotalConns))
-				r.opts.Meter.Counter(PoolConnIdleCurrent).Set(uint64(stats.IdleConns))
-				r.opts.Meter.Counter(PoolConnStaleTotal).Set(uint64(stats.StaleConns))
+		for _ = range ticker.C {
+			if st == nil {
+				return
 			}
+			stats := st.PoolStats()
+			r.opts.Meter.Counter(PoolHitsTotal).Set(uint64(stats.Hits))
+			r.opts.Meter.Counter(PoolMissesTotal).Set(uint64(stats.Misses))
+			r.opts.Meter.Counter(PoolTimeoutTotal).Set(uint64(stats.Timeouts))
+			r.opts.Meter.Counter(PoolConnTotalCurrent).Set(uint64(stats.TotalConns))
+			r.opts.Meter.Counter(PoolConnIdleCurrent).Set(uint64(stats.IdleConns))
+			r.opts.Meter.Counter(PoolConnStaleTotal).Set(uint64(stats.StaleConns))
 		}
 	}()
 }
