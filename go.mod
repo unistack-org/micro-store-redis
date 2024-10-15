@@ -5,7 +5,7 @@ go 1.22
 toolchain go1.22.4
 
 require (
-	github.com/redis/go-redis/extra/rediscmd/v9 v9.5.3
+	github.com/redis/go-redis/extra/rediscmd/v9 v9.6.2
 	github.com/redis/go-redis/v9 v9.6.2
 	go.unistack.org/micro/v3 v3.10.97
 )
