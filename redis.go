@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"time"
@@ -118,6 +119,8 @@ func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOpti
 	b := r.pool.Get()
 	defer r.pool.Put(b)
 	options := store.NewExistsOptions(opts...)
+	labels := make([]string, 0, 6)
+	labels = append(labels, "name", options.Name, "statement", "exists")
 
 	timeout := r.opts.Timeout
 	if options.Timeout > 0 {
@@ -132,21 +135,22 @@ func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOpti
 
 	rkey := r.getKey(b, r.opts.Namespace, options.Namespace, key)
 
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Inc()
 	ts := time.Now()
 	val, err := r.cli.Exists(ctx, rkey).Result()
 	setSpanError(ctx, err)
 	te := time.Since(ts)
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
-	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
-	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == goredis.Nil || (err == nil && val == 0) {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Dec()
+
+	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, labels...).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, labels...).Update(te.Seconds())
+	if errors.Is(err, goredis.Nil) || (err == nil && val == 0) {
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "miss")...).Inc()
 		return store.ErrNotFound
 	} else if err == nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "hit")...).Inc()
 	} else if err != nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 		return err
 	}
 
@@ -158,6 +162,8 @@ func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...s
 	defer r.pool.Put(b)
 
 	options := store.NewReadOptions(opts...)
+	labels := make([]string, 0, 6)
+	labels = append(labels, "name", options.Name, "statement", "read")
 
 	timeout := r.opts.Timeout
 	if options.Timeout > 0 {
@@ -172,21 +178,21 @@ func (r *Store) Read(ctx context.Context, key string, val interface{}, opts ...s
 
 	rkey := r.getKey(b, r.opts.Namespace, options.Namespace, key)
 
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Inc()
 	ts := time.Now()
 	buf, err := r.cli.Get(ctx, rkey).Bytes()
 	setSpanError(ctx, err)
 	te := time.Since(ts)
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
-	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
-	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == goredis.Nil || (err == nil && buf == nil) {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Dec()
+	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, labels...).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, labels...).Update(te.Seconds())
+	if errors.Is(err, goredis.Nil) || (err == nil && buf == nil) {
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "miss")...).Inc()
 		return store.ErrNotFound
 	} else if err == nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "hit")...).Inc()
 	} else if err != nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 		return err
 	}
 
@@ -363,6 +369,8 @@ func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOpti
 	defer r.pool.Put(b)
 
 	options := store.NewDeleteOptions(opts...)
+	labels := make([]string, 0, 6)
+	labels = append(labels, "name", options.Name, "statement", "delete")
 
 	timeout := r.opts.Timeout
 	if options.Timeout > 0 {
@@ -375,21 +383,22 @@ func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOpti
 		defer cancel()
 	}
 
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Inc()
 	ts := time.Now()
 	err := r.cli.Del(ctx, r.getKey(b, r.opts.Namespace, options.Namespace, key)).Err()
 	te := time.Since(ts)
 	setSpanError(ctx, err)
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
-	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
-	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == goredis.Nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
+
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Dec()
+	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, labels...).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, labels...).Update(te.Seconds())
+	if errors.Is(err, goredis.Nil) {
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "miss")...).Inc()
 		return store.ErrNotFound
 	} else if err == nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "hit")...).Inc()
 	} else if err != nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 		return err
 	}
 
@@ -484,6 +493,8 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 	defer r.pool.Put(b)
 
 	options := store.NewWriteOptions(opts...)
+	labels := make([]string, 0, 6)
+	labels = append(labels, "name", options.Name, "statement", "write")
 
 	timeout := r.opts.Timeout
 	if options.Timeout > 0 {
@@ -512,22 +523,22 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 		}
 	}
 
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Inc()
 	ts := time.Now()
 	err := r.cli.Set(ctx, rkey, buf, options.TTL).Err()
 	te := time.Since(ts)
 	setSpanError(ctx, err)
 
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
-	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
-	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
-	if err == goredis.Nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Dec()
+	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, labels...).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, labels...).Update(te.Seconds())
+	if errors.Is(err, goredis.Nil) {
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "miss")...).Inc()
 		return store.ErrNotFound
 	} else if err == nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "hit")...).Inc()
 	} else if err != nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 		return err
 	}
 
