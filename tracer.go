@@ -73,7 +73,7 @@ func (h *tracingHook) ProcessHook(hook goredis.ProcessHook) goredis.ProcessHook 
 		case "cluster slots":
 			break
 		default:
-			_, span := h.tr.Start(ctx, "goredis.process", append(h.opts, tracer.WithSpanLabels("db.statement", cmdString))...)
+			_, span := h.tr.Start(ctx, "sdk.database", append(h.opts, tracer.WithSpanLabels("db.statement", cmdString))...)
 			defer func() {
 				recordError(span, err)
 				span.Finish()
@@ -91,11 +91,11 @@ func (h *tracingHook) ProcessPipelineHook(hook goredis.ProcessPipelineHook) gore
 		_, cmdsString := rediscmd.CmdsString(cmds)
 
 		opts := append(h.opts, tracer.WithSpanLabels(
-			"db.goredis.num_cmd", strconv.Itoa(len(cmds)),
+			"db.database.num_cmd", strconv.Itoa(len(cmds)),
 			"db.statement", cmdsString,
 		))
 
-		_, span := h.tr.Start(ctx, "goredis.process_pipeline", opts...)
+		_, span := h.tr.Start(ctx, "sdk.database", opts...)
 		defer span.Finish()
 
 		err := hook(ctx, cmds)

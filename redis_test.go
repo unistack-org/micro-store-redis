@@ -12,6 +12,26 @@ import (
 	"go.unistack.org/micro/v3/tracer"
 )
 
+func TestLazyConnect(t *testing.T) {
+	ctx := context.Background()
+	var err error
+
+	r := NewStore()
+
+	if err = r.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Connect(ctx); err != nil {
+		t.Logf("connect failed %v", err)
+	}
+
+	for {
+		if err = r.Write(ctx, "mykey", "myval"); err != nil {
+			t.Logf("failed to write %v", err)
+		}
+	}
+}
+
 func TestKeepTTL(t *testing.T) {
 	ctx := context.Background()
 
