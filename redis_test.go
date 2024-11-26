@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ func TestKeepTTL(t *testing.T) {
 	}
 	r := NewStore(store.Addrs(os.Getenv("STORE_NODES")))
 
-	if err := r.Init(); err != nil {
+	if err := r.Init(store.LazyConnect(true)); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Connect(ctx); err != nil {
@@ -119,9 +120,11 @@ func Test_rkv_configure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			b := atomic.Bool{}
 			rc := &Store{
-				opts: tt.fields.options,
-				cli:  tt.fields.Client,
+				opts:      tt.fields.options,
+				cli:       tt.fields.Client,
+				connected: &b,
 			}
 			err := rc.configure()
 			if (err != nil) != tt.wantErr {

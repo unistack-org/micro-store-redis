@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -55,19 +56,28 @@ var (
 )
 
 type Store struct {
-	opts store.Options
-	cli  goredis.UniversalClient
-	done chan struct{}
-	pool *pool.StringsPool
+	cli       goredis.UniversalClient
+	pool      *pool.StringsPool
+	connected *atomic.Bool
+	opts      store.Options
 }
 
 func (r *Store) Connect(ctx context.Context) error {
+	if r.connected.Load() {
+		return nil
+	}
 	if r.cli == nil {
 		return store.ErrNotConnected
 	}
-	err := r.cli.Ping(ctx).Err()
-	setSpanError(ctx, err)
-	return err
+	if r.opts.LazyConnect {
+		return nil
+	}
+	if err := r.cli.Ping(ctx).Err(); err != nil {
+		setSpanError(ctx, err)
+		return err
+	}
+	r.connected.Store(true)
+	return nil
 }
 
 func (r *Store) Init(opts ...store.Option) error {
@@ -102,17 +112,18 @@ func (r *Store) ClusterClient() *goredis.ClusterClient {
 }
 
 func (r *Store) Disconnect(ctx context.Context) error {
-	var err error
-	select {
-	case <-r.done:
-		return err
-	default:
-		if r.cli != nil {
-			err = r.cli.Close()
-		}
-		close(r.done)
-		return err
+	if !r.connected.Load() {
+		return nil
 	}
+
+	if r.cli != nil {
+		if err := r.cli.Close(); err != nil {
+			return err
+		}
+	}
+
+	r.connected.Store(false)
+	return nil
 }
 
 func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOption) error {
@@ -149,7 +160,7 @@ func (r *Store) Exists(ctx context.Context, key string, opts ...store.ExistsOpti
 		return store.ErrNotFound
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "hit")...).Inc()
-	} else if err != nil {
+	} else {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 		return err
 	}
@@ -311,6 +322,8 @@ func (r *Store) MRead(ctx context.Context, keys []string, vals interface{}, opts
 
 func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.DeleteOption) error {
 	options := store.NewDeleteOptions(opts...)
+	labels := make([]string, 0, 6)
+	labels = append(labels, "name", options.Name, "statement", "delete")
 
 	timeout := r.opts.Timeout
 	if options.Timeout > 0 {
@@ -335,7 +348,7 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 		}
 	}
 
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Inc()
 	ts := time.Now()
 	var err error
 	if r.opts.Namespace != "" || options.Namespace != "" {
@@ -348,16 +361,16 @@ func (r *Store) MDelete(ctx context.Context, keys []string, opts ...store.Delete
 	}
 	setSpanError(ctx, err)
 	te := time.Since(ts)
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
-	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
-	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Dec()
+	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, labels...).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, labels...).Update(te.Seconds())
 	if err == goredis.Nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "miss")...).Inc()
 		return store.ErrNotFound
 	} else if err == nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "hit")...).Inc()
 	} else if err != nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 		return err
 	}
 
@@ -407,6 +420,8 @@ func (r *Store) Delete(ctx context.Context, key string, opts ...store.DeleteOpti
 
 func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, opts ...store.WriteOption) error {
 	options := store.NewWriteOptions(opts...)
+	labels := make([]string, 0, 6)
+	labels = append(labels, "name", options.Name, "statement", "write")
 
 	timeout := r.opts.Timeout
 	if options.Timeout > 0 {
@@ -440,7 +455,7 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 		}
 	}
 
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Inc()
 
 	pipeliner := func(pipe goredis.Pipeliner) error {
 		for idx := 0; idx < len(kvs); idx += 2 {
@@ -460,27 +475,27 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 	te := time.Since(ts)
 	setSpanError(ctx, err)
 
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
-	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
-	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Dec()
+	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, labels...).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, labels...).Update(te.Seconds())
 	if err == goredis.Nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "miss")...).Inc()
 		return store.ErrNotFound
 	} else if err == nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "hit")...).Inc()
 	} else if err != nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 		return err
 	}
 
 	for _, cmd := range cmds {
 		if err = cmd.Err(); err != nil {
 			if err == goredis.Nil {
-				r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
+				r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "miss")...).Inc()
 				return store.ErrNotFound
 			}
 			setSpanError(ctx, err)
-			r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
+			r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 			return err
 		}
 	}
@@ -537,7 +552,7 @@ func (r *Store) Write(ctx context.Context, key string, val interface{}, opts ...
 		return store.ErrNotFound
 	} else if err == nil {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "hit")...).Inc()
-	} else if err != nil {
+	} else {
 		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 		return err
 	}
@@ -550,6 +565,9 @@ func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, e
 	defer r.pool.Put(b)
 
 	options := store.NewListOptions(opts...)
+	labels := make([]string, 0, 6)
+	labels = append(labels, "name", options.Name, "statement", "list")
+
 	if len(options.Namespace) == 0 {
 		options.Namespace = r.opts.Namespace
 	}
@@ -571,7 +589,7 @@ func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, e
 	}
 
 	// TODO: add support for prefix/suffix/limit
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Inc()
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Inc()
 	ts := time.Now()
 	var keys []string
 	var err error
@@ -591,16 +609,16 @@ func (r *Store) List(ctx context.Context, opts ...store.ListOption) ([]string, e
 	te := time.Since(ts)
 	setSpanError(ctx, err)
 
-	r.opts.Meter.Counter(semconv.StoreRequestInflight, "name", options.Name).Dec()
-	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, "name", options.Name).Update(te.Seconds())
-	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, "name", options.Name).Update(te.Seconds())
+	r.opts.Meter.Counter(semconv.StoreRequestInflight, labels...).Dec()
+	r.opts.Meter.Summary(semconv.StoreRequestLatencyMicroseconds, labels...).Update(te.Seconds())
+	r.opts.Meter.Histogram(semconv.StoreRequestDurationSeconds, labels...).Update(te.Seconds())
 	if err == goredis.Nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "miss").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "miss")...).Inc()
 		return nil, store.ErrNotFound
 	} else if err == nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "hit").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "git")...).Inc()
 	} else if err != nil {
-		r.opts.Meter.Counter(semconv.StoreRequestTotal, "name", options.Name, "status", "failure").Inc()
+		r.opts.Meter.Counter(semconv.StoreRequestTotal, append(labels, "status", "failure")...).Inc()
 		return nil, err
 	}
 
@@ -632,7 +650,11 @@ func (r *Store) String() string {
 }
 
 func NewStore(opts ...store.Option) *Store {
-	return &Store{done: make(chan struct{}), opts: store.NewOptions(opts...)}
+	b := atomic.Bool{}
+	return &Store{
+		opts:      store.NewOptions(opts...),
+		connected: &b,
+	}
 }
 
 func (r *Store) configure() error {
@@ -723,6 +745,7 @@ func (r *Store) configure() error {
 
 	r.cli = goredis.NewUniversalClient(universalOptions)
 	setTracing(r.cli, r.opts.Tracer)
+	r.cli.AddHook(newEventHook(r.connected))
 
 	r.pool = pool.NewStringsPool(50)
 
