@@ -37,8 +37,13 @@ func (h *eventHook) DialHook(hook goredis.DialHook) goredis.DialHook {
 func (h *eventHook) ProcessHook(hook goredis.ProcessHook) goredis.ProcessHook {
 	return func(ctx context.Context, cmd goredis.Cmder) error {
 		err := hook(ctx, cmd)
-		if err != nil && !isRedisError(err) {
-			h.connected.Store(false)
+		if err != nil {
+			if !isRedisError(err) {
+				h.connected.Store(false)
+			}
+			h.connected.Store(true)
+		} else {
+			h.connected.Store(true)
 		}
 		return err
 	}
@@ -47,8 +52,13 @@ func (h *eventHook) ProcessHook(hook goredis.ProcessHook) goredis.ProcessHook {
 func (h *eventHook) ProcessPipelineHook(hook goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []goredis.Cmder) error {
 		err := hook(ctx, cmds)
-		if err != nil && !isRedisError(err) {
-			h.connected.Store(false)
+		if err != nil {
+			if !isRedisError(err) {
+				h.connected.Store(false)
+			}
+			h.connected.Store(true)
+		} else {
+			h.connected.Store(true)
 		}
 		return err
 	}
