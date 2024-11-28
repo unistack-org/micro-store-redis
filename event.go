@@ -22,8 +22,13 @@ func newEventHook(connected *atomic.Bool) *eventHook {
 func (h *eventHook) DialHook(hook goredis.DialHook) goredis.DialHook {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		conn, err := hook(ctx, network, addr)
-		if err != nil && !isRedisError(err) {
-			h.connected.Store(false)
+		if err != nil {
+			if !isRedisError(err) {
+				h.connected.Store(false)
+			}
+			h.connected.Store(true)
+		} else {
+			h.connected.Store(true)
 		}
 		return conn, err
 	}
