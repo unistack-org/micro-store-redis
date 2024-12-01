@@ -4,19 +4,20 @@ import (
 	"context"
 	"errors"
 	"net"
-	"sync/atomic"
+	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+	"go.unistack.org/micro/v3/store"
 )
 
 type eventHook struct {
-	connected *atomic.Bool
+	s *Store
 }
 
 var _ goredis.Hook = (*eventHook)(nil)
 
-func newEventHook(connected *atomic.Bool) *eventHook {
-	return &eventHook{connected: connected}
+func newEventHook(s *Store) *eventHook {
+	return &eventHook{s: s}
 }
 
 func (h *eventHook) DialHook(hook goredis.DialHook) goredis.DialHook {
@@ -24,11 +25,16 @@ func (h *eventHook) DialHook(hook goredis.DialHook) goredis.DialHook {
 		conn, err := hook(ctx, network, addr)
 		if err != nil {
 			if !isRedisError(err) {
-				h.connected.Store(false)
+				if h.s.connected.CompareAndSwap(1, 0) {
+					h.s.sendEvent(&event{ts: time.Now(), err: err, t: store.EventTypeDisconnect})
+				}
+			} else {
+				h.s.connected.Store(1)
 			}
-			h.connected.Store(true)
 		} else {
-			h.connected.Store(true)
+			if h.s.connected.CompareAndSwap(0, 1) {
+				h.s.sendEvent(&event{ts: time.Now(), err: err, t: store.EventTypeConnect})
+			}
 		}
 		return conn, err
 	}
@@ -39,11 +45,16 @@ func (h *eventHook) ProcessHook(hook goredis.ProcessHook) goredis.ProcessHook {
 		err := hook(ctx, cmd)
 		if err != nil {
 			if !isRedisError(err) {
-				h.connected.Store(false)
+				if h.s.connected.CompareAndSwap(1, 0) {
+					h.s.sendEvent(&event{ts: time.Now(), err: err, t: store.EventTypeDisconnect})
+				}
+			} else {
+				h.s.connected.Store(1)
 			}
-			h.connected.Store(true)
 		} else {
-			h.connected.Store(true)
+			if h.s.connected.CompareAndSwap(0, 1) {
+				h.s.sendEvent(&event{ts: time.Now(), err: err, t: store.EventTypeConnect})
+			}
 		}
 		return err
 	}
@@ -54,11 +65,16 @@ func (h *eventHook) ProcessPipelineHook(hook goredis.ProcessPipelineHook) goredi
 		err := hook(ctx, cmds)
 		if err != nil {
 			if !isRedisError(err) {
-				h.connected.Store(false)
+				if h.s.connected.CompareAndSwap(1, 0) {
+					h.s.sendEvent(&event{ts: time.Now(), err: err, t: store.EventTypeDisconnect})
+				}
+			} else {
+				h.s.connected.Store(1)
 			}
-			h.connected.Store(true)
 		} else {
-			h.connected.Store(true)
+			if h.s.connected.CompareAndSwap(0, 1) {
+				h.s.sendEvent(&event{ts: time.Now(), err: err, t: store.EventTypeConnect})
+			}
 		}
 		return err
 	}
