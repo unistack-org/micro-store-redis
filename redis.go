@@ -3,7 +3,6 @@ package redis
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -804,7 +803,6 @@ func (r *Store) sendEvent(e store.Event) {
 		watchers = append(watchers, w)
 	}
 	r.mu.RUnlock()
-	fmt.Printf("evt %#+v\n", e)
 	for _, w := range watchers {
 		select {
 		case <-w.exit:
