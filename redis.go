@@ -67,6 +67,18 @@ type Store struct {
 	mu        sync.RWMutex
 }
 
+func (r *Store) Live() bool {
+	return r.connected.Load() == 1
+}
+
+func (r *Store) Ready() bool {
+	return r.connected.Load() == 1
+}
+
+func (r *Store) Health() bool {
+	return r.connected.Load() == 1
+}
+
 func (r *Store) Connect(ctx context.Context) error {
 	if r.connected.Load() == 1 {
 		return nil
