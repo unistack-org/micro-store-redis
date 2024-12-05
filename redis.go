@@ -98,11 +98,7 @@ func (r *Store) Connect(ctx context.Context) error {
 }
 
 func (r *Store) Init(opts ...store.Option) error {
-	for _, o := range opts {
-		o(&r.opts)
-	}
-
-	err := r.configure()
+	err := r.configure(opts...)
 	if err != nil {
 		return err
 	}
@@ -675,9 +671,13 @@ func NewStore(opts ...store.Option) *Store {
 	}
 }
 
-func (r *Store) configure() error {
-	if r.cli != nil && r.opts.Context == nil {
+func (r *Store) configure(opts ...store.Option) error {
+	if r.cli != nil && len(opts) == 0 {
 		return nil
+	}
+
+	for _, o := range opts {
+		o(&r.opts)
 	}
 
 	universalOptions := DefaultUniversalOptions
@@ -708,8 +708,8 @@ func (r *Store) configure() error {
 			universalOptions.ConnMaxIdleTime = o.ConnMaxIdleTime
 			universalOptions.ConnMaxLifetime = o.ConnMaxLifetime
 
-			if r.opts.TLSConfig != nil {
-				universalOptions.TLSConfig = r.opts.TLSConfig
+			if o.TLSConfig != nil {
+				universalOptions.TLSConfig = o.TLSConfig
 			}
 		}
 
@@ -742,15 +742,15 @@ func (r *Store) configure() error {
 			universalOptions.MaxIdleConns = o.MaxIdleConns
 			universalOptions.ConnMaxIdleTime = o.ConnMaxIdleTime
 			universalOptions.ConnMaxLifetime = o.ConnMaxLifetime
-			if r.opts.TLSConfig != nil {
-				universalOptions.TLSConfig = r.opts.TLSConfig
+			if o.TLSConfig != nil {
+				universalOptions.TLSConfig = o.TLSConfig
 			}
 		}
 
 		if o, ok := r.opts.Context.Value(universalConfigKey{}).(*goredis.UniversalOptions); ok {
 			universalOptions = o
-			if r.opts.TLSConfig != nil {
-				universalOptions.TLSConfig = r.opts.TLSConfig
+			if o.TLSConfig != nil {
+				universalOptions.TLSConfig = o.TLSConfig
 			}
 		}
 	}
