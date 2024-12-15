@@ -22,11 +22,7 @@ func (r *Store) Connect(ctx context.Context) error {
 }
 
 func (r *Store) Init(opts ...options.Option) error {
-	for _, o := range opts {
-		o(&r.opts)
-	}
-
-	return r.configure()
+	return r.configure(opts...)
 }
 
 func (r *Store) Redis() redis.UniversalClient {
@@ -237,8 +233,11 @@ func (r *Store) MWrite(ctx context.Context, keys []string, vals []interface{}, o
 	}
 
 	cmds, err := r.cli.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		var err error
 		for idx := 0; idx < len(kvs); idx += 2 {
-			pipe.Set(ctx, kvs[idx], kvs[idx+1], options.TTL).Result()
+			if _, err = pipe.Set(ctx, kvs[idx], kvs[idx+1], options.TTL).Result(); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -335,11 +334,18 @@ func NewStore(opts ...options.Option) *Store {
 	return &Store{opts: store.NewOptions(opts...)}
 }
 
-func (r *Store) configure() error {
-	var redisUniversalOptions *redis.UniversalOptions
-
-	if r.cli != nil && r.opts.Context == nil {
+func (r *Store) configure(opts ...options.Option) error {
+	if r.cli != nil && len(opts) == 0 {
 		return nil
+	}
+
+	var redisUniversalOptions *redis.UniversalOptions
+	var err error
+
+	for _, o := range opts {
+		if err = o(r.opts); err != nil {
+			return err
+		}
 	}
 
 	if r.opts.Context != nil {
