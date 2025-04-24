@@ -2,11 +2,11 @@ package redis
 
 import (
 	"github.com/redis/go-redis/v9"
-	"go.unistack.org/micro/v4/options"
+	"go.unistack.org/micro/v4/store"
 )
 
 type universalConfigKey struct{}
 
-func UniversalConfig(c *redis.UniversalOptions) options.Option {
-	return options.ContextOption(universalConfigKey{}, c)
+func UniversalConfig(c *redis.UniversalOptions) store.Option {
+	return store.SetOption(universalConfigKey{}, c)
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"go.unistack.org/micro/v4/options"
 	"go.unistack.org/micro/v4/store"
 )
 
@@ -38,7 +37,7 @@ func Test_rkv_configure(t *testing.T) {
 			},
 		},
 		{
-			name: "legacy Url", fields: fields{options: store.Options{Address: []string{"127.0.0.1:6379"}}, Client: nil},
+			name: "legacy Url", fields: fields{options: store.Options{Addrs: []string{"127.0.0.1:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "",
@@ -46,7 +45,7 @@ func Test_rkv_configure(t *testing.T) {
 			},
 		},
 		{
-			name: "New Url", fields: fields{options: store.Options{Address: []string{"redis://127.0.0.1:6379"}}, Client: nil},
+			name: "New Url", fields: fields{options: store.Options{Addrs: []string{"redis://127.0.0.1:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "",
@@ -54,7 +53,7 @@ func Test_rkv_configure(t *testing.T) {
 			},
 		},
 		{
-			name: "Url with Pwd", fields: fields{options: store.Options{Address: []string{"redis://:password@redis:6379"}}, Client: nil},
+			name: "Url with Pwd", fields: fields{options: store.Options{Addrs: []string{"redis://:password@redis:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "password",
@@ -62,7 +61,7 @@ func Test_rkv_configure(t *testing.T) {
 			},
 		},
 		{
-			name: "Url with username and Pwd", fields: fields{options: store.Options{Address: []string{"redis://username:password@redis:6379"}}, Client: nil},
+			name: "Url with username and Pwd", fields: fields{options: store.Options{Addrs: []string{"redis://username:password@redis:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "username",
 				password: "password",
@@ -91,7 +90,7 @@ func Test_Store(t *testing.T) {
 	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
 		t.Skip()
 	}
-	r := NewStore(options.Address(os.Getenv("STORE_NODES")))
+	r := NewStore(store.Addrs(os.Getenv("STORE_NODES")))
 
 	if err := r.Init(); err != nil {
 		t.Fatal(err)
@@ -131,7 +130,7 @@ func Test_MRead(t *testing.T) {
 	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
 		t.Skip()
 	}
-	r := NewStore(options.Address(os.Getenv("STORE_NODES")))
+	r := NewStore(store.Addrs(os.Getenv("STORE_NODES")))
 
 	if err = r.Init(); err != nil {
 		t.Fatal(err)
