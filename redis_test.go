@@ -4,17 +4,67 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
 	"go.unistack.org/micro/v4/store"
+	"go.unistack.org/micro/v4/tracer"
 )
+
+func TestLazyConnect(t *testing.T) {
+	t.Skip("skipping test for manual check")
+	ctx := context.Background()
+	var err error
+
+	r := NewStore()
+
+	if err = r.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Connect(ctx); err != nil {
+		t.Logf("connect failed %v", err)
+	}
+
+	for {
+		if err = r.Write(ctx, "mykey", "myval"); err != nil {
+			t.Logf("failed to write %v", err)
+		}
+	}
+}
+
+func TestKeepTTL(t *testing.T) {
+	ctx := context.Background()
+
+	if tr := os.Getenv("INTEGRATION_TESTS"); len(tr) > 0 {
+		t.Skip()
+	}
+	r := NewStore(store.Addrs(os.Getenv("STORE_NODES")))
+
+	if err := r.Init(store.LazyConnect(true)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	key := "key"
+	err := r.Write(ctx, key, "val1", store.WriteTTL(15*time.Second))
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	time.Sleep(3 * time.Second)
+	err = r.Write(ctx, key, "val2", store.WriteTTL(-1))
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+}
 
 func Test_rkv_configure(t *testing.T) {
 	type fields struct {
 		options store.Options
-		Client  *redis.Client
+		Client  goredis.UniversalClient
 	}
 	type wantValues struct {
 		username string
@@ -37,7 +87,7 @@ func Test_rkv_configure(t *testing.T) {
 			},
 		},
 		{
-			name: "legacy Url", fields: fields{options: store.Options{Addrs: []string{"127.0.0.1:6379"}}, Client: nil},
+			name: "legacy Url", fields: fields{options: store.Options{Tracer: tracer.DefaultTracer, Addrs: []string{"127.0.0.1:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "",
@@ -45,7 +95,7 @@ func Test_rkv_configure(t *testing.T) {
 			},
 		},
 		{
-			name: "New Url", fields: fields{options: store.Options{Addrs: []string{"redis://127.0.0.1:6379"}}, Client: nil},
+			name: "New Url", fields: fields{options: store.Options{Tracer: tracer.DefaultTracer, Addrs: []string{"redis://127.0.0.1:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "",
@@ -53,7 +103,7 @@ func Test_rkv_configure(t *testing.T) {
 			},
 		},
 		{
-			name: "Url with Pwd", fields: fields{options: store.Options{Addrs: []string{"redis://:password@redis:6379"}}, Client: nil},
+			name: "Url with Pwd", fields: fields{options: store.Options{Tracer: tracer.DefaultTracer, Addrs: []string{"redis://:password@redis:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "",
 				password: "password",
@@ -61,7 +111,7 @@ func Test_rkv_configure(t *testing.T) {
 			},
 		},
 		{
-			name: "Url with username and Pwd", fields: fields{options: store.Options{Addrs: []string{"redis://username:password@redis:6379"}}, Client: nil},
+			name: "Url with username and Pwd", fields: fields{options: store.Options{Tracer: tracer.DefaultTracer, Addrs: []string{"redis://username:password@redis:6379"}}, Client: nil},
 			wantErr: false, want: wantValues{
 				username: "username",
 				password: "password",
@@ -71,9 +121,11 @@ func Test_rkv_configure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			b := atomic.Uint32{}
 			rc := &Store{
-				opts: tt.fields.options,
-				cli:  tt.fields.Client,
+				opts:      tt.fields.options,
+				cli:       tt.fields.Client,
+				connected: &b,
 			}
 			err := rc.configure()
 			if (err != nil) != tt.wantErr {
