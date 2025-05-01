@@ -33,7 +33,7 @@ func (r *Store) statsMeter() {
 		ticker := time.NewTicker(meter.DefaultMeterStatsInterval)
 		defer ticker.Stop()
 
-		for _ = range ticker.C {
+		for range ticker.C {
 			if st == nil {
 				return
 			}
