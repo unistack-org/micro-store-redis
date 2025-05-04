@@ -26,6 +26,12 @@ func UniversalConfig(c *goredis.UniversalOptions) store.Option {
 	return store.SetOption(universalConfigKey{}, c)
 }
 
+type failoverConfigKey struct{}
+
+func FailoverConfig(c *goredis.FailoverOptions) store.Option {
+	return store.SetOption(failoverConfigKey{}, c)
+}
+
 var (
 	labelHost = "redis_host"
 	labelName = "redis_name"
