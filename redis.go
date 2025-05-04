@@ -707,10 +707,7 @@ func (r *Store) configure(opts ...store.Option) error {
 			universalOptions.MaxIdleConns = o.MaxIdleConns
 			universalOptions.ConnMaxIdleTime = o.ConnMaxIdleTime
 			universalOptions.ConnMaxLifetime = o.ConnMaxLifetime
-
-			if o.TLSConfig != nil {
-				universalOptions.TLSConfig = o.TLSConfig
-			}
+			universalOptions.TLSConfig = o.TLSConfig
 		}
 
 		if o, ok := r.opts.Context.Value(clusterConfigKey{}).(*goredis.ClusterOptions); ok {
@@ -742,22 +739,54 @@ func (r *Store) configure(opts ...store.Option) error {
 			universalOptions.MaxIdleConns = o.MaxIdleConns
 			universalOptions.ConnMaxIdleTime = o.ConnMaxIdleTime
 			universalOptions.ConnMaxLifetime = o.ConnMaxLifetime
-			if o.TLSConfig != nil {
-				universalOptions.TLSConfig = o.TLSConfig
-			}
+			universalOptions.TLSConfig = o.TLSConfig
+		}
+
+		if o, ok := r.opts.Context.Value(failoverConfigKey{}).(*goredis.FailoverOptions); ok {
+			universalOptions.ClientName = o.ClientName
+			universalOptions.MasterName = o.MasterName
+			universalOptions.Addrs = o.SentinelAddrs
+			universalOptions.Dialer = o.Dialer
+			universalOptions.OnConnect = o.OnConnect
+			universalOptions.Username = o.Username
+			universalOptions.Password = o.Password
+			universalOptions.SentinelUsername = o.SentinelUsername
+			universalOptions.SentinelPassword = o.SentinelPassword
+
+			universalOptions.ReadOnly = o.ReplicaOnly
+			universalOptions.RouteByLatency = o.RouteByLatency
+			universalOptions.RouteRandomly = o.RouteRandomly
+
+			universalOptions.MaxRetries = o.MaxRetries
+			universalOptions.MinRetryBackoff = o.MinRetryBackoff
+			universalOptions.MaxRetryBackoff = o.MaxRetryBackoff
+
+			universalOptions.DialTimeout = o.DialTimeout
+			universalOptions.ReadTimeout = o.ReadTimeout
+			universalOptions.WriteTimeout = o.WriteTimeout
+			universalOptions.ContextTimeoutEnabled = o.ContextTimeoutEnabled
+
+			universalOptions.PoolFIFO = o.PoolFIFO
+
+			universalOptions.PoolSize = o.PoolSize
+			universalOptions.PoolTimeout = o.PoolTimeout
+			universalOptions.MinIdleConns = o.MinIdleConns
+			universalOptions.MaxIdleConns = o.MaxIdleConns
+			universalOptions.ConnMaxIdleTime = o.ConnMaxIdleTime
+			universalOptions.ConnMaxLifetime = o.ConnMaxLifetime
+			universalOptions.TLSConfig = o.TLSConfig
 		}
 
 		if o, ok := r.opts.Context.Value(universalConfigKey{}).(*goredis.UniversalOptions); ok {
 			universalOptions = o
-			if o.TLSConfig != nil {
-				universalOptions.TLSConfig = o.TLSConfig
-			}
 		}
 	}
 
 	if len(r.opts.Addrs) > 0 {
 		universalOptions.Addrs = r.opts.Addrs
-	} else {
+	}
+
+	if len(universalOptions.Addrs) == 0 {
 		universalOptions.Addrs = []string{"127.0.0.1:6379"}
 	}
 
