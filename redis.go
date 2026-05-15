@@ -10,10 +10,10 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	"go.unistack.org/micro/v4/semconv"
-	"go.unistack.org/micro/v4/store"
-	"go.unistack.org/micro/v4/util/id"
-	pool "go.unistack.org/micro/v4/util/xpool"
+	"go.unistack.org/micro/v5/semconv"
+	"go.unistack.org/micro/v5/store"
+	"go.unistack.org/micro/v5/util/id"
+	pool "go.unistack.org/micro/v5/util/xpool"
 )
 
 var (

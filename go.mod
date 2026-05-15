@@ -1,4 +1,4 @@
-module go.unistack.org/micro-store-redis/v4
+module go.unistack.org/micro-store-redis/v5
 
 go 1.22.0
 
@@ -7,7 +7,7 @@ toolchain go1.24.2
 require (
 	github.com/redis/go-redis/extra/rediscmd/v9 v9.8.0
 	github.com/redis/go-redis/v9 v9.8.0
-	go.unistack.org/micro/v4 v4.1.10
+	go.unistack.org/micro/v5 v4.1.10
 )
 
 require (
@@ -18,7 +18,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/matoous/go-nanoid v1.5.1 // indirect
 	github.com/spf13/cast v1.8.0 // indirect
-	go.unistack.org/micro-proto/v4 v4.1.0 // indirect
+	go.unistack.org/micro-proto/v5 v4.1.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

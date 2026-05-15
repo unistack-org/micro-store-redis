@@ -7,7 +7,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	"go.unistack.org/micro/v4/store"
+	"go.unistack.org/micro/v5/store"
 )
 
 type eventHook struct {

@@ -8,7 +8,7 @@ import (
 
 	rediscmd "github.com/redis/go-redis/extra/rediscmd/v9"
 	goredis "github.com/redis/go-redis/v9"
-	"go.unistack.org/micro/v4/tracer"
+	"go.unistack.org/micro/v5/tracer"
 )
 
 func setTracing(rdb goredis.UniversalClient, tr tracer.Tracer, opts ...tracer.SpanOption) {

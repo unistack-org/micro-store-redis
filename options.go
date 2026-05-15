@@ -2,10 +2,10 @@ package redis
 
 import (
 	goredis "github.com/redis/go-redis/v9"
-	"go.unistack.org/micro/v4/logger"
-	"go.unistack.org/micro/v4/meter"
-	"go.unistack.org/micro/v4/store"
-	"go.unistack.org/micro/v4/tracer"
+	"go.unistack.org/micro/v5/logger"
+	"go.unistack.org/micro/v5/meter"
+	"go.unistack.org/micro/v5/store"
+	"go.unistack.org/micro/v5/tracer"
 )
 
 type configKey struct{}
