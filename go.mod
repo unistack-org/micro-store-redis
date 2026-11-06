@@ -3,7 +3,7 @@ module go.unistack.org/micro-store-redis/v5
 go 1.26.0
 
 require (
-	github.com/redis/go-redis/extra/rediscmd/v9 v9.19.0
+	github.com/redis/go-redis/extra/rediscmd/v9 v9.23.0
 	github.com/redis/go-redis/v9 v9.23.0
 	go.unistack.org/micro/v5 v5.0.1
 )
